@@ -303,9 +303,14 @@
         btnReject.addEventListener('click', () => saveTask('rejected'));
 
         document.addEventListener('keydown', (e) => {
+            if(e.target.tagName === 'INPUT' || e.target.tagName === 'SELECT') return;
             const key = e.key.toLowerCase();
             if(key === 'a') btnPrev.click();
             if(key === 'd') btnNext.click();
+            if(key === 't') {
+                const isVisible = anchorGroup.visible();
+                anchorGroup.visible(!isVisible);
+            }
         });
 
         const scaleBy = 1.1;
