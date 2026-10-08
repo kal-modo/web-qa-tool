@@ -160,7 +160,7 @@
             for(let i=0; i<points.length; i+=2) {
                 const anchor = new Konva.Circle({
                     x: points[i], y: points[i+1],
-                    radius: 4, fill: 'white', stroke: '#4ade80', strokeWidth: 2,
+                    radius: 2, fill: 'white', stroke: '#4ade80', strokeWidth: 2,
                     draggable: true,
                     name: i.toString() // Store array index
                 });
@@ -179,7 +179,7 @@
                     drawAnchors(); // Redraw everything
                 });
 
-                anchor.on('mouseover', function () { document.body.style.cursor = 'pointer'; this.scale({x:1.5, y:1.5}); });
+                anchor.on('mouseover', function () { document.body.style.cursor = 'pointer'; this.scale({x:3, y:3}); });
                 anchor.on('mouseout', function () { document.body.style.cursor = 'default'; this.scale({x:1, y:1}); });
 
                 anchorGroup.add(anchor);
