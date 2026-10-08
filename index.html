@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Project Neegus: Web QA Pro</title>
+    <title>Project Neegus: Web QA Pro V2</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
     <script src="https://unpkg.com/konva@9.3.6/konva.min.js"></script>
@@ -15,10 +15,18 @@
 </head>
 <body class="p-8 flex flex-col items-center">
 
-    <h1 class="text-3xl font-bold mb-2 text-green-400">YOLO Web QA Tool (Pro V2)</h1>
+    <h1 class="text-3xl font-bold mb-2 text-green-400">YOLO Web QA Tool (Pro V3)</h1>
     <p class="mb-4 text-sm text-gray-400">
         <b>Left-Click + Drag</b> dots to move. <b>Double-Click a Dot</b> to delete it. <b>Right-Click the Canvas</b> near the line to add a dot.
     </p>
+
+    <!-- Dropdown for Skins -->
+    <div class="flex gap-4 mb-4 items-center bg-gray-800 p-3 rounded shadow">
+        <label for="skin-select" class="text-gray-300 font-bold">Filter Skin:</label>
+        <select id="skin-select" class="p-2 rounded text-black font-bold w-64">
+            <option value="all">All Skins</option>
+        </select>
+    </div>
     
     <div id="controls" class="flex items-center gap-4 mb-4">
         <button id="btn-prev" class="bg-gray-600 px-4 py-2 rounded font-bold hover:bg-gray-500 hidden">&larr; Prev</button>
@@ -39,6 +47,7 @@
     <div id="canvas-container" class="rounded shadow-lg"></div>
 
     <script>
+        let allTasks = [];
         let tasks = [];
         let currentIndex = 0;
         
@@ -55,7 +64,7 @@
         
         anchorGroup = new Konva.Group();
 
-        // Math Helpers for "Adding Dots" near the line
+        // Math Helpers
         function sqr(x) { return x * x }
         function dist2(v, w) { return sqr(v.x - w.x) + sqr(v.y - w.y) }
         function projectPointToSegment(p, v, w) {
@@ -83,6 +92,7 @@
         const btnReject = document.getElementById('btn-reject');
         const counterText = document.getElementById('counter');
         const statusText = document.getElementById('status');
+        const skinSelect = document.getElementById('skin-select');
 
         // Load all tasks on startup
         async function initApp() {
@@ -91,7 +101,17 @@
                 counterText.innerText = "No Tasks";
                 return;
             }
-            tasks = data;
+            allTasks = data;
+            tasks = allTasks;
+            
+            // Populate Dropdown
+            const uniqueSkins = [...new Set(allTasks.map(t => t.skin_name))];
+            uniqueSkins.forEach(skin => {
+                const opt = document.createElement('option');
+                opt.value = skin;
+                opt.innerText = skin;
+                skinSelect.appendChild(opt);
+            });
             
             // Find the first pending task
             let firstPending = tasks.findIndex(t => t.status === 'pending');
@@ -105,12 +125,29 @@
             loadCurrentTask();
         }
 
+        // Dropdown Listener
+        skinSelect.addEventListener('change', (e) => {
+            const selected = e.target.value;
+            if (selected === 'all') {
+                tasks = allTasks;
+            } else {
+                tasks = allTasks.filter(t => t.skin_name === selected);
+            }
+            let firstPending = tasks.findIndex(t => t.status === 'pending');
+            currentIndex = firstPending !== -1 ? firstPending : 0;
+            loadCurrentTask();
+        });
+
         function loadCurrentTask() {
+            if(tasks.length === 0) {
+                statusText.innerText = "No tasks for this skin.";
+                return;
+            }
+
             const task = tasks[currentIndex];
             counterText.innerText = `${currentIndex + 1} / ${tasks.length}`;
             statusText.innerText = `Status: ${task.status.toUpperCase()} | ${task.filename}`;
             
-            // Reset Camera
             stage.scale({x: 1, y: 1});
             stage.position({x: 0, y: 0});
 
@@ -133,9 +170,8 @@
                 imageNode = new Konva.Image({ x, y, image: imageObj, width: w, height: h });
                 layer.add(imageNode);
 
-                // Parse YOLO string
                 const parts = task.yolo_coordinates.split(' ').map(parseFloat);
-                parts.shift(); // Remove class ID
+                parts.shift();
                 
                 points = [];
                 for(let i=0; i<parts.length; i+=2) {
@@ -162,40 +198,43 @@
                     x: points[i], y: points[i+1],
                     radius: 2, fill: 'white', stroke: '#4ade80', strokeWidth: 2,
                     draggable: true,
-                    name: i.toString() // Store array index
+                    name: i.toString()
                 });
 
-                // Move dot
                 anchor.on('dragmove', function () {
                     points[i] = this.x();
                     points[i+1] = this.y();
                     polygon.points(points);
                 });
 
-                // Delete dot on Double Click
                 anchor.on('dblclick', function (e) {
-                    e.cancelBubble = true; // Prevent canvas double-click
-                    points.splice(i, 2); // Remove x and y
-                    drawAnchors(); // Redraw everything
+                    e.cancelBubble = true;
+                    points.splice(i, 2);
+                    drawAnchors();
                 });
 
-                anchor.on('mouseover', function () { document.body.style.cursor = 'pointer'; this.scale({x:3, y:3}); });
-                anchor.on('mouseout', function () { document.body.style.cursor = 'default'; this.scale({x:1, y:1}); });
+                // Translucency & smaller scale on hover
+                anchor.on('mouseover', function () { 
+                    document.body.style.cursor = 'pointer'; 
+                    this.scale({x:1.5, y:1.5}); 
+                    this.opacity(0.3);
+                });
+                anchor.on('mouseout', function () { 
+                    document.body.style.cursor = 'default'; 
+                    this.scale({x:1, y:1}); 
+                    this.opacity(1);
+                });
 
                 anchorGroup.add(anchor);
             }
         }
 
-        // Prevent default browser right-click menu on the canvas
         document.getElementById('canvas-container').addEventListener('contextmenu', e => e.preventDefault());
 
-        // Add dot on Canvas Right Click
         stage.on('mousedown', (e) => {
-            // Only trigger on Right Click (button 2)
             if(e.evt.button !== 2) return;
-            if(e.target.className === 'Circle') return; // Handled by dot delete
+            if(e.target.className === 'Circle') return;
             
-            // 1. Account for Camera Zoom and Pan offsets
             const transform = stage.getAbsoluteTransform().copy();
             transform.invert();
             const pos = transform.point(stage.getPointerPosition());
@@ -204,7 +243,6 @@
             let insertIdx = 0;
             let snappedPoint = {x: pos.x, y: pos.y};
             
-            // 2. Find the closest line segment and SNAP the point to it
             for(let i=0; i<points.length; i+=2) {
                 let x1 = points[i], y1 = points[i+1];
                 let nextI = (i+2) % points.length;
@@ -215,12 +253,11 @@
                 
                 if(distSq < minDist) {
                     minDist = distSq;
-                    insertIdx = i + 2; // Insert after this point
-                    snappedPoint = proj; // Snap to the actual line
+                    insertIdx = i + 2;
+                    snappedPoint = proj;
                 }
             }
             
-            // Insert snapped x, y into the array
             points.splice(insertIdx, 0, snappedPoint.x, snappedPoint.y);
             drawAnchors();
         });
@@ -241,59 +278,50 @@
                 newYoloStr += ` ${nx.toFixed(6)} ${ny.toFixed(6)}`;
             }
 
-            // Update Database
             const { error } = await sb.from('qa_tasks').update({ 
                 status: newStatus, yolo_coordinates: newYoloStr 
             }).eq('id', task.id);
 
             if(error) { alert("Error saving!"); return; }
 
-            // Update local memory and go next
             task.status = newStatus;
             task.yolo_coordinates = newYoloStr;
+            
+            // Automatically find and update the task in the allTasks array as well
+            let masterTask = allTasks.find(t => t.id === task.id);
+            if(masterTask) {
+                masterTask.status = newStatus;
+                masterTask.yolo_coordinates = newYoloStr;
+            }
+            
             btnNext.click();
         }
 
-        // Navigation
         btnPrev.addEventListener('click', () => { if(currentIndex > 0) { currentIndex--; loadCurrentTask(); }});
         btnNext.addEventListener('click', () => { if(currentIndex < tasks.length - 1) { currentIndex++; loadCurrentTask(); }});
         btnApprove.addEventListener('click', () => saveTask('approved'));
         btnReject.addEventListener('click', () => saveTask('rejected'));
 
-        // Keyboard Navigation (A and D)
         document.addEventListener('keydown', (e) => {
             const key = e.key.toLowerCase();
             if(key === 'a') btnPrev.click();
             if(key === 'd') btnNext.click();
         });
 
-        // Mouse Wheel Zoom
         const scaleBy = 1.1;
         stage.on('wheel', (e) => {
             e.evt.preventDefault();
-            
             const oldScale = stage.scaleX();
             const pointer = stage.getPointerPosition();
-            
-            const mousePointTo = {
-                x: (pointer.x - stage.x()) / oldScale,
-                y: (pointer.y - stage.y()) / oldScale,
-            };
-            
+            const mousePointTo = { x: (pointer.x - stage.x()) / oldScale, y: (pointer.y - stage.y()) / oldScale };
             let direction = e.evt.deltaY > 0 ? -1 : 1;
             if (e.evt.ctrlKey) direction = -direction;
-            
             const newScale = direction > 0 ? oldScale * scaleBy : oldScale / scaleBy;
             stage.scale({ x: newScale, y: newScale });
-            
-            const newPos = {
-                x: pointer.x - mousePointTo.x * newScale,
-                y: pointer.y - mousePointTo.y * newScale,
-            };
+            const newPos = { x: pointer.x - mousePointTo.x * newScale, y: pointer.y - mousePointTo.y * newScale };
             stage.position(newPos);
         });
 
-        // Start
         initApp();
     </script>
 </body>
