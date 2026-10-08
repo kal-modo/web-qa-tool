@@ -25,7 +25,11 @@
         <label for="skin-select" class="text-gray-300 font-bold">Filter Skin:</label>
         <select id="skin-select" class="p-2 rounded text-black font-bold w-64">
             <option value="all">All Skins</option>
+            <optgroup id="opt-pending" label="Pending Skins"></optgroup>
+            <optgroup id="opt-finished" label="Finished Tagging"></optgroup>
         </select>
+        
+        <button id="btn-skin-done" class="bg-blue-600 px-4 py-2 rounded font-bold hover:bg-blue-500 ml-4 shadow">Mark Skin as Done</button>
     </div>
     
     <div id="controls" class="flex items-center gap-4 mb-4">
@@ -93,6 +97,40 @@
         const counterText = document.getElementById('counter');
         const statusText = document.getElementById('status');
         const skinSelect = document.getElementById('skin-select');
+        const btnSkinDone = document.getElementById('btn-skin-done');
+        
+        function updateDropdown() {
+            const optPending = document.getElementById('opt-pending');
+            const optFinished = document.getElementById('opt-finished');
+            
+            // Save current selection
+            const currentSelection = skinSelect.value;
+            
+            optPending.innerHTML = '';
+            optFinished.innerHTML = '';
+            
+            const uniqueSkins = [...new Set(allTasks.map(t => t.skin_name))];
+            
+            uniqueSkins.forEach(skin => {
+                const skinTasks = allTasks.filter(t => t.skin_name === skin);
+                // A skin is finished if NO tasks are pending
+                const isFinished = skinTasks.every(t => t.status !== 'pending');
+                const approvedCount = skinTasks.filter(t => t.status === 'approved').length;
+                
+                const opt = document.createElement('option');
+                opt.value = skin;
+                opt.innerText = `${skin} (${approvedCount}/${skinTasks.length})`;
+                
+                if (isFinished) {
+                    optFinished.appendChild(opt);
+                } else {
+                    optPending.appendChild(opt);
+                }
+            });
+            
+            // Restore selection
+            skinSelect.value = currentSelection;
+        }
 
         // Load all tasks on startup
         async function initApp() {
@@ -104,16 +142,8 @@
             allTasks = data;
             tasks = allTasks;
             
-            // Populate Dropdown
-            const uniqueSkins = [...new Set(allTasks.map(t => t.skin_name))];
-            uniqueSkins.forEach(skin => {
-                const opt = document.createElement('option');
-                opt.value = skin;
-                opt.innerText = skin;
-                skinSelect.appendChild(opt);
-            });
+            updateDropdown();
             
-            // Find the first pending task
             let firstPending = tasks.findIndex(t => t.status === 'pending');
             currentIndex = firstPending !== -1 ? firstPending : 0;
             
@@ -136,6 +166,41 @@
             let firstPending = tasks.findIndex(t => t.status === 'pending');
             currentIndex = firstPending !== -1 ? firstPending : 0;
             loadCurrentTask();
+        });
+        
+        // Mark Skin as Done Button
+        btnSkinDone.addEventListener('click', async () => {
+            const selectedSkin = skinSelect.value;
+            if(selectedSkin === 'all') {
+                alert("Please select a specific skin from the dropdown first!");
+                return;
+            }
+            
+            if(!confirm(`Are you sure you want to approve all remaining frames for ${selectedSkin}?`)) return;
+            
+            statusText.innerText = `Approving all remaining frames for ${selectedSkin}...`;
+            
+            // Update Database in bulk
+            const { error } = await sb.from('qa_tasks')
+                .update({ status: 'approved' })
+                .eq('skin_name', selectedSkin)
+                .eq('status', 'pending');
+                
+            if(error) {
+                alert("Database error while marking as done.");
+                return;
+            }
+            
+            // Update local memory
+            allTasks.forEach(t => {
+                if(t.skin_name === selectedSkin && t.status === 'pending') {
+                    t.status = 'approved';
+                }
+            });
+            
+            // Refresh UI
+            updateDropdown();
+            skinSelect.dispatchEvent(new Event('change'));
         });
 
         function loadCurrentTask() {
@@ -294,6 +359,7 @@
                 masterTask.yolo_coordinates = newYoloStr;
             }
             
+            updateDropdown();
             btnNext.click();
         }
 
