@@ -161,7 +161,7 @@
         }
 
         async function initApp() {
-            const { data, error } = await sb.from('qa_tasks').select('*').order('filename');
+            const { data, error } = await sb.from('qa_tasks').select('*').neq('status', 'rejected').order('filename');
             if(error || !data || data.length === 0) { totalFrames.innerText = "0"; return; }
             allTasks = data;
             tasks = allTasks;
@@ -250,6 +250,18 @@
             const task = tasks[currentIndex];
             let newStatus = forceStatus || (task.status === 'pending' ? 'approved' : task.status);
             let newYoloStr = task.yolo_coordinates; // Fallback to current if invalid
+            
+            if (newStatus === 'rejected') {
+                // Instantly remove it from the site
+                sb.from('qa_tasks').update({ status: 'rejected', yolo_coordinates: '0' }).eq('id', task.id).then();
+                allTasks = allTasks.filter(t => t.id !== task.id);
+                tasks = tasks.filter(t => t.id !== task.id);
+                
+                updateDropdown();
+                if (currentIndex >= tasks.length) currentIndex = Math.max(0, tasks.length - 1);
+                loadCurrentTask();
+                return;
+            }
             
             if (imageNode) {
                 if (points.length >= 6) {
