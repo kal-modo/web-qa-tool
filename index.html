@@ -67,6 +67,8 @@
         let pointsHistory = [];
         let stage, layer, imageObj, imageNode, polygon, anchorGroup, tempRect;
         
+        let isImageLoading = false;
+        
         // Box Drawing State
         let isDrawingBox = false;
         let boxStartX = 0, boxStartY = 0;
@@ -245,7 +247,7 @@
 
         // Core Navigation and Auto-Saving Logic
         function navigate(direction, targetIndex = null, forceStatus = null) {
-            if (tasks.length === 0) return;
+            if (tasks.length === 0 || isImageLoading) return;
             
             const task = tasks[currentIndex];
             let newStatus = forceStatus || (task.status === 'pending' ? 'approved' : task.status);
@@ -316,6 +318,7 @@
             if(tasks.length === 0) { statusText.innerText = "No tasks for this skin."; return; }
 
             pointsHistory = []; // Reset undo history for the new frame
+            isImageLoading = true; // Lock navigation
 
             const task = tasks[currentIndex];
             frameInput.value = currentIndex + 1;
@@ -339,6 +342,7 @@
             imageObj.src = fileData.publicUrl;
             
             imageObj.onload = () => {
+                isImageLoading = false; // Unlock navigation
                 const scale = Math.min(CANVAS_WIDTH / imageObj.width, CANVAS_HEIGHT / imageObj.height);
                 const w = imageObj.width * scale;
                 const h = imageObj.height * scale;
