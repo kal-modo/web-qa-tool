@@ -25,7 +25,6 @@
     <div class="flex gap-4 mb-4 items-center bg-gray-800 p-3 rounded shadow">
         <label for="skin-select" class="text-gray-300 font-bold">Filter Skin:</label>
         <select id="skin-select" class="p-2 rounded text-black font-bold w-64">
-            <option value="all">All Skins</option>
             <optgroup id="opt-pending" label="Pending Skins"></optgroup>
             <optgroup id="opt-finished" label="Finished Tagging"></optgroup>
         </select>
@@ -121,11 +120,8 @@
         
         function updateButtonVisibility() {
             const selectedSkin = skinSelect.value;
-            if (selectedSkin === 'all') {
-                btnSkinDone.classList.add('hidden');
-                btnSkinReset.classList.add('hidden');
-                return;
-            }
+            if (!selectedSkin) return;
+            
             const skinTasks = allTasks.filter(t => t.skin_name === selectedSkin);
             const isFinished = skinTasks.every(t => t.status !== 'pending');
             if (isFinished) {
@@ -158,7 +154,13 @@
                 if (isFinished) optFinished.appendChild(opt);
                 else optPending.appendChild(opt);
             });
-            skinSelect.value = currentSelection;
+            
+            // If the previously selected skin still exists, keep it, otherwise default to first
+            if (uniqueSkins.includes(currentSelection)) {
+                skinSelect.value = currentSelection;
+            } else if (skinSelect.options.length > 0) {
+                skinSelect.selectedIndex = 0;
+            }
             updateButtonVisibility();
         }
 
@@ -166,9 +168,12 @@
             const { data, error } = await sb.from('qa_tasks').select('*').neq('status', 'rejected').order('filename');
             if(error || !data || data.length === 0) { totalFrames.innerText = "0"; return; }
             allTasks = data;
-            tasks = allTasks;
             
             updateDropdown();
+            
+            const initialSkin = skinSelect.value;
+            tasks = allTasks.filter(t => t.skin_name === initialSkin);
+            
             let firstPending = tasks.findIndex(t => t.status === 'pending');
             currentIndex = firstPending !== -1 ? firstPending : 0;
             
@@ -184,7 +189,7 @@
 
         skinSelect.addEventListener('change', (e) => {
             const selected = e.target.value;
-            tasks = selected === 'all' ? allTasks : allTasks.filter(t => t.skin_name === selected);
+            tasks = allTasks.filter(t => t.skin_name === selected);
             updateButtonVisibility();
             let firstPending = tasks.findIndex(t => t.status === 'pending');
             currentIndex = firstPending !== -1 ? firstPending : 0;
@@ -193,7 +198,7 @@
         
         btnSkinDone.addEventListener('click', async () => {
             const selectedSkin = skinSelect.value;
-            if(selectedSkin === 'all') return;
+            if(!selectedSkin) return;
             if(!confirm(`Are you sure you want to approve all remaining frames for ${selectedSkin}?`)) return;
             statusText.innerText = `Approving...`;
             
@@ -207,7 +212,7 @@
 
         btnSkinReset.addEventListener('click', async () => {
             const selectedSkin = skinSelect.value;
-            if(selectedSkin === 'all') return;
+            if(!selectedSkin) return;
             if(!confirm(`Are you sure you want to move ${selectedSkin} back to the Pending queue?`)) return;
             statusText.innerText = `Moving...`;
             
