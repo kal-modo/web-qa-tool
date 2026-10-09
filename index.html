@@ -241,6 +241,11 @@
         }
         btnUndo.addEventListener('click', applyUndo);
 
+        btnPrev.addEventListener('click', () => navigate('prev'));
+        btnNext.addEventListener('click', () => navigate('next'));
+        btnApprove.addEventListener('click', () => navigate('next', null, 'approved'));
+        btnReject.addEventListener('click', () => navigate('next', null, 'rejected'));
+
         function clearMask() {
             saveState(); // Allow undoing the clear
             points = [];
@@ -278,7 +283,11 @@
                     const h = imageNode.height();
                     const startX = imageNode.x();
                     const startY = imageNode.y();
-                    newYoloStr = "0";
+                    
+                    // Preserve the original Class ID instead of hardcoding '0'
+                    const origParts = task.yolo_coordinates.split(' ');
+                    const classId = origParts.length > 0 ? origParts[0] : "0";
+                    newYoloStr = classId;
                     
                     for(let i=0; i<points.length; i+=2) {
                         let nx = Math.max(0, Math.min(1, (points[i] - startX) / w));
@@ -347,27 +356,36 @@
             tempRect = new Konva.Rect({ stroke: '#4ade80', strokeWidth: 2, dash: [5, 5], visible: false });
 
             const { data: fileData } = sb.storage.from('dataset_frames').getPublicUrl(task.filename);
-            imageObj = new Image();
-            imageObj.crossOrigin = "Anonymous";
-            imageObj.src = fileData.publicUrl;
             
-            imageObj.onload = () => {
+            // Use a local image object to prevent race conditions during fast skipping
+            const currentImg = new Image();
+            currentImg.crossOrigin = "Anonymous";
+            currentImg.src = fileData.publicUrl;
+            
+            currentImg.onload = () => {
+                // If the user somehow navigated away before this loaded, abort drawing it
+                if (tasks[currentIndex].id !== task.id) return;
+                
                 isImageLoading = false; // Unlock navigation
-                const scale = Math.min(CANVAS_WIDTH / imageObj.width, CANVAS_HEIGHT / imageObj.height);
-                const w = imageObj.width * scale;
-                const h = imageObj.height * scale;
+                imageObj = currentImg; // Update global reference
+                
+                const scale = Math.min(CANVAS_WIDTH / currentImg.width, CANVAS_HEIGHT / currentImg.height);
+                const w = currentImg.width * scale;
+                const h = currentImg.height * scale;
                 const x = (CANVAS_WIDTH - w) / 2;
                 const y = (CANVAS_HEIGHT - h) / 2;
 
-                imageNode = new Konva.Image({ x, y, image: imageObj, width: w, height: h });
+                imageNode = new Konva.Image({ x, y, image: currentImg, width: w, height: h });
                 layer.add(imageNode);
 
                 const parts = task.yolo_coordinates.split(' ').map(parseFloat);
-                parts.shift();
+                parts.shift(); // Remove class ID
                 
                 points = [];
                 for(let i=0; i<parts.length; i+=2) {
-                    points.push(x + (parts[i] * w), y + (parts[i+1] * h));
+                    if(!isNaN(parts[i]) && !isNaN(parts[i+1])) {
+                        points.push(x + (parts[i] * w), y + (parts[i+1] * h));
+                    }
                 }
 
                 polygon = new Konva.Line({
