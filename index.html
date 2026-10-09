@@ -18,7 +18,7 @@
 
     <h1 class="text-3xl font-bold mb-2 text-green-400">YOLO Web QA Tool (Pro V4)</h1>
     <p class="mb-4 text-sm text-gray-400">
-        <b>Left-Click + Drag</b> dots. <b>Right-Click Canvas</b> to add dot. <b>[T]</b> Toggle dots. <b>[R]</b> Reset to Box.
+        <b>Left-Click + Drag</b> dots. <b>Right-Click Canvas</b> to add dot. <b>[T]</b> Toggle dots. <b>[R]</b> Reset to Box. <b>[Z]</b> Undo.
     </p>
 
     <!-- Dropdown for Skins -->
@@ -47,6 +47,7 @@
     </div>
 
     <div class="flex gap-4 mb-6">
+        <button id="btn-undo" class="bg-blue-600 px-6 py-2 rounded font-bold hover:bg-blue-500 hidden text-white shadow">Undo (Z)</button>
         <button id="btn-reset-mask" class="bg-purple-600 px-4 py-2 rounded font-bold hover:bg-purple-500 hidden">Reset to Box (R)</button>
         <button id="btn-approve" class="bg-green-500 px-6 py-2 rounded font-bold text-lg hover:bg-green-400 hidden">Save & Next</button>
         <button id="btn-reject" class="bg-red-500 px-4 py-2 rounded font-bold hover:bg-red-400 hidden">Reject</button>
@@ -63,6 +64,7 @@
         let currentIndex = 0;
         
         let points = [];
+        let pointsHistory = [];
         let stage, layer, imageObj, imageNode, polygon, anchorGroup, tempRect;
         
         // Box Drawing State
@@ -107,6 +109,7 @@
         const btnApprove = document.getElementById('btn-approve');
         const btnReject = document.getElementById('btn-reject');
         const btnResetMask = document.getElementById('btn-reset-mask');
+        const btnUndo = document.getElementById('btn-undo');
         const frameInput = document.getElementById('frame-input');
         const totalFrames = document.getElementById('total-frames');
         const statusText = document.getElementById('status');
@@ -172,6 +175,7 @@
             btnApprove.classList.remove('hidden');
             btnReject.classList.remove('hidden');
             btnResetMask.classList.remove('hidden');
+            btnUndo.classList.remove('hidden');
             
             loadCurrentTask();
         }
@@ -213,7 +217,25 @@
             skinSelect.dispatchEvent(new Event('change'));
         });
 
+        // Undo System
+        function saveState() {
+            pointsHistory.push([...points]);
+            if (pointsHistory.length > 30) pointsHistory.shift();
+        }
+
+        function applyUndo() {
+            if (pointsHistory.length > 0) {
+                points = pointsHistory.pop();
+                drawAnchors();
+                statusText.innerText = "Undo applied.";
+            } else {
+                statusText.innerText = "Nothing to undo!";
+            }
+        }
+        btnUndo.addEventListener('click', applyUndo);
+
         function clearMask() {
+            saveState(); // Allow undoing the clear
             points = [];
             drawAnchors();
             statusText.innerText = "Click and Drag to draw a new bounding box...";
@@ -273,6 +295,8 @@
 
         function loadCurrentTask() {
             if(tasks.length === 0) { statusText.innerText = "No tasks for this skin."; return; }
+
+            pointsHistory = []; // Reset undo history for the new frame
 
             const task = tasks[currentIndex];
             frameInput.value = currentIndex + 1;
@@ -336,6 +360,10 @@
                     draggable: true, name: i.toString()
                 });
 
+                anchor.on('dragstart', function () {
+                    saveState(); // Save state before dragging
+                });
+
                 anchor.on('dragmove', function () {
                     points[i] = this.x();
                     points[i+1] = this.y();
@@ -344,6 +372,7 @@
 
                 anchor.on('dblclick', function (e) {
                     e.cancelBubble = true;
+                    saveState(); // Save state before removing a point
                     points.splice(i, 2);
                     drawAnchors();
                 });
@@ -373,6 +402,8 @@
             }
             
             if(e.evt.button === 2 && points.length > 0) {
+                saveState(); // Save state before right-clicking to add a new point
+                
                 const pos = getRelativePointer();
                 let minDist = Infinity;
                 let insertIdx = 0;
@@ -403,6 +434,8 @@
             isDrawingBox = false;
             tempRect.visible(false);
             
+            saveState(); // Save state before creating the box, allowing undo back to empty state
+
             const pos = getRelativePointer();
             points = [ boxStartX, boxStartY, pos.x, boxStartY, pos.x, pos.y, boxStartX, pos.y ];
             
@@ -411,12 +444,6 @@
             statusText.innerText = "Box generated! Adjust the corners if needed.";
         });
 
-        // Button Mappings
-        btnPrev.addEventListener('click', () => navigate('prev'));
-        btnNext.addEventListener('click', () => navigate('next'));
-        btnApprove.addEventListener('click', () => navigate('next', null, 'approved'));
-        btnReject.addEventListener('click', () => navigate('next', null, 'rejected'));
-
         // Keyboard Mappings
         document.addEventListener('keydown', (e) => {
             if(e.target.tagName === 'INPUT' || e.target.tagName === 'SELECT') return;
@@ -424,6 +451,7 @@
             if(key === 'a') navigate('prev');
             if(key === 'd') navigate('next');
             if(key === 'r') clearMask();
+            if(key === 'z') applyUndo();
             if(key === 't') {
                 const isVisible = anchorGroup.visible();
                 anchorGroup.visible(!isVisible);
