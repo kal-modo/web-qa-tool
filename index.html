@@ -11,6 +11,7 @@
     <style>
         body { background-color: #1e1e2f; color: white; user-select: none; }
         #canvas-container { border: 2px solid #4ade80; background-color: #2d2d44; }
+        input[type=number]::-webkit-inner-spin-button { opacity: 1; }
     </style>
 </head>
 <body class="p-8 flex flex-col items-center">
@@ -34,9 +35,15 @@
     </div>
     
     <div id="controls" class="flex items-center gap-4 mb-4">
-        <button id="btn-prev" class="bg-gray-600 px-4 py-2 rounded font-bold hover:bg-gray-500 hidden">&larr; Prev</button>
-        <span id="counter" class="font-bold text-xl w-32 text-center text-gray-300">Loading...</span>
-        <button id="btn-next" class="bg-gray-600 px-4 py-2 rounded font-bold hover:bg-gray-500 hidden">Skip &rarr;</button>
+        <button id="btn-prev" class="bg-gray-600 px-4 py-2 rounded font-bold hover:bg-gray-500 hidden">&larr; Prev (A)</button>
+        
+        <div class="flex items-center gap-2 px-4">
+            <span class="text-gray-400">Frame:</span>
+            <input type="number" id="frame-input" class="w-20 bg-gray-700 text-white font-bold text-center p-1 rounded shadow" min="1" value="1" />
+            <span class="text-gray-300 font-bold">/ <span id="total-frames">0</span></span>
+        </div>
+        
+        <button id="btn-next" class="bg-gray-600 px-4 py-2 rounded font-bold hover:bg-gray-500 hidden">Skip &rarr; (D)</button>
     </div>
 
     <div class="flex gap-4 mb-6">
@@ -82,10 +89,6 @@
             t = Math.max(0, Math.min(1, t));
             return { x: v.x + t * (w.x - v.x), y: v.y + t * (w.y - v.y) };
         }
-        function distToSegmentSquared(p, v, w) {
-            let proj = projectPointToSegment(p, v, w);
-            return dist2(p, proj);
-        }
         function getRelativePointer() {
             const transform = stage.getAbsoluteTransform().copy();
             transform.invert();
@@ -104,7 +107,8 @@
         const btnApprove = document.getElementById('btn-approve');
         const btnReject = document.getElementById('btn-reject');
         const btnResetMask = document.getElementById('btn-reset-mask');
-        const counterText = document.getElementById('counter');
+        const frameInput = document.getElementById('frame-input');
+        const totalFrames = document.getElementById('total-frames');
         const statusText = document.getElementById('status');
         const skinSelect = document.getElementById('skin-select');
         const btnSkinDone = document.getElementById('btn-skin-done');
@@ -155,7 +159,7 @@
 
         async function initApp() {
             const { data, error } = await sb.from('qa_tasks').select('*').order('filename');
-            if(error || !data || data.length === 0) { counterText.innerText = "No Tasks"; return; }
+            if(error || !data || data.length === 0) { totalFrames.innerText = "0"; return; }
             allTasks = data;
             tasks = allTasks;
             
@@ -213,20 +217,72 @@
             points = [];
             drawAnchors();
             statusText.innerText = "Click and Drag to draw a new bounding box...";
-            stage.draggable(false); // Disable stage panning so we can drag the box
+            stage.draggable(false);
         }
         btnResetMask.addEventListener('click', clearMask);
+
+        // Core Navigation and Auto-Saving Logic
+        function navigate(direction, targetIndex = null, forceStatus = null) {
+            if (tasks.length === 0) return;
+            
+            // 1. Implicitly save the current frame
+            const task = tasks[currentIndex];
+            if (points.length >= 6 && imageNode) {
+                const w = imageNode.width();
+                const h = imageNode.height();
+                const startX = imageNode.x();
+                const startY = imageNode.y();
+                let newYoloStr = "0";
+                
+                for(let i=0; i<points.length; i+=2) {
+                    let nx = Math.max(0, Math.min(1, (points[i] - startX) / w));
+                    let ny = Math.max(0, Math.min(1, (points[i+1] - startY) / h));
+                    newYoloStr += ` ${nx.toFixed(6)} ${ny.toFixed(6)}`;
+                }
+                
+                // If they navigate away from a pending frame, auto-approve it
+                let newStatus = forceStatus || (task.status === 'pending' ? 'approved' : task.status);
+                task.yolo_coordinates = newYoloStr;
+                task.status = newStatus;
+                
+                let masterTask = allTasks.find(t => t.id === task.id);
+                if(masterTask) { masterTask.yolo_coordinates = newYoloStr; masterTask.status = newStatus; }
+                
+                // Fire and forget database update
+                sb.from('qa_tasks').update({ yolo_coordinates: newYoloStr, status: newStatus }).eq('id', task.id).then(() => updateDropdown());
+            }
+            
+            // 2. Change Index
+            if (direction === 'prev' && currentIndex > 0) currentIndex--;
+            else if (direction === 'next' && currentIndex < tasks.length - 1) currentIndex++;
+            else if (direction === 'jump' && targetIndex !== null) currentIndex = targetIndex;
+            
+            // 3. Load
+            loadCurrentTask();
+        }
+
+        // Frame Number Input Logic
+        frameInput.addEventListener('change', (e) => {
+            let val = parseInt(e.target.value);
+            if(isNaN(val)) val = currentIndex + 1;
+            if(val < 1) val = 1;
+            if(val > tasks.length) val = tasks.length;
+            navigate('jump', val - 1);
+            e.target.blur(); // Remove focus so hotkeys work
+        });
 
         function loadCurrentTask() {
             if(tasks.length === 0) { statusText.innerText = "No tasks for this skin."; return; }
 
             const task = tasks[currentIndex];
-            counterText.innerText = `${currentIndex + 1} / ${tasks.length}`;
+            frameInput.value = currentIndex + 1;
+            totalFrames.innerText = tasks.length;
+            
             statusText.innerText = `Status: ${task.status.toUpperCase()} | ${task.filename}`;
             
             stage.scale({x: 1, y: 1});
             stage.position({x: 0, y: 0});
-            stage.draggable(true); // Re-enable panning
+            stage.draggable(true);
             isDrawingBox = false;
 
             layer.destroyChildren();
@@ -301,11 +357,9 @@
 
         document.getElementById('canvas-container').addEventListener('contextmenu', e => e.preventDefault());
 
-        // Mouse Events
         stage.on('mousedown', (e) => {
             if(e.target.className === 'Circle') return;
             
-            // 1. Box Drawing Mode (Left Click when Empty)
             if(points.length === 0 && e.evt.button === 0) {
                 isDrawingBox = true;
                 const pos = getRelativePointer();
@@ -318,7 +372,6 @@
                 return;
             }
             
-            // 2. Add Dot Mode (Right Click)
             if(e.evt.button === 2 && points.length > 0) {
                 const pos = getRelativePointer();
                 let minDist = Infinity;
@@ -351,62 +404,25 @@
             tempRect.visible(false);
             
             const pos = getRelativePointer();
+            points = [ boxStartX, boxStartY, pos.x, boxStartY, pos.x, pos.y, boxStartX, pos.y ];
             
-            // Convert rect to a 4-point polygon
-            points = [
-                boxStartX, boxStartY,
-                pos.x, boxStartY,
-                pos.x, pos.y,
-                boxStartX, pos.y
-            ];
-            
-            stage.draggable(true); // Re-enable panning
+            stage.draggable(true);
             drawAnchors();
             statusText.innerText = "Box generated! Adjust the corners if needed.";
         });
 
-        async function saveTask(newStatus) {
-            if(points.length < 6) {
-                alert("A mask must have at least 3 points!");
-                return;
-            }
-        
-            const task = tasks[currentIndex];
-            statusText.innerText = "Saving to Database...";
-            const w = imageNode.width();
-            const h = imageNode.height();
-            const startX = imageNode.x();
-            const startY = imageNode.y();
+        // Button Mappings
+        btnPrev.addEventListener('click', () => navigate('prev'));
+        btnNext.addEventListener('click', () => navigate('next'));
+        btnApprove.addEventListener('click', () => navigate('next', null, 'approved'));
+        btnReject.addEventListener('click', () => navigate('next', null, 'rejected'));
 
-            let newYoloStr = "0";
-            for(let i=0; i<points.length; i+=2) {
-                let nx = Math.max(0, Math.min(1, (points[i] - startX) / w));
-                let ny = Math.max(0, Math.min(1, (points[i+1] - startY) / h));
-                newYoloStr += ` ${nx.toFixed(6)} ${ny.toFixed(6)}`;
-            }
-
-            const { error } = await sb.from('qa_tasks').update({ status: newStatus, yolo_coordinates: newYoloStr }).eq('id', task.id);
-            if(error) { alert("Error saving!"); return; }
-
-            task.status = newStatus;
-            task.yolo_coordinates = newYoloStr;
-            let masterTask = allTasks.find(t => t.id === task.id);
-            if(masterTask) { masterTask.status = newStatus; masterTask.yolo_coordinates = newYoloStr; }
-            
-            updateDropdown();
-            btnNext.click();
-        }
-
-        btnPrev.addEventListener('click', () => { if(currentIndex > 0) { currentIndex--; loadCurrentTask(); }});
-        btnNext.addEventListener('click', () => { if(currentIndex < tasks.length - 1) { currentIndex++; loadCurrentTask(); }});
-        btnApprove.addEventListener('click', () => saveTask('approved'));
-        btnReject.addEventListener('click', () => saveTask('rejected'));
-
+        // Keyboard Mappings
         document.addEventListener('keydown', (e) => {
             if(e.target.tagName === 'INPUT' || e.target.tagName === 'SELECT') return;
             const key = e.key.toLowerCase();
-            if(key === 'a') btnPrev.click();
-            if(key === 'd') btnNext.click();
+            if(key === 'a') navigate('prev');
+            if(key === 'd') navigate('next');
             if(key === 'r') clearMask();
             if(key === 't') {
                 const isVisible = anchorGroup.visible();
@@ -414,6 +430,7 @@
             }
         });
 
+        // Zoom Logic
         const scaleBy = 1.1;
         stage.on('wheel', (e) => {
             e.evt.preventDefault();
