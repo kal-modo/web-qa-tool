@@ -195,6 +195,7 @@
             let firstPending = tasks.findIndex(t => t.status === 'pending');
             currentIndex = firstPending !== -1 ? firstPending : 0;
             loadCurrentTask();
+            e.target.blur(); // Remove focus so the A and D hotkeys don't get intercepted by the dropdown!
         });
         
         btnSkinDone.addEventListener('click', async () => {
