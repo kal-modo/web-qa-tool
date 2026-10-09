@@ -292,7 +292,7 @@
                     drawAnchors();
                 });
 
-                anchor.on('mouseover', function () { document.body.style.cursor = 'pointer'; this.scale({x:3, y:3}); this.opacity(0.3); });
+                anchor.on('mouseover', function () { document.body.style.cursor = 'pointer'; this.scale({x:1.5, y:1.5}); this.opacity(0.3); });
                 anchor.on('mouseout', function () { document.body.style.cursor = 'default'; this.scale({x:1, y:1}); this.opacity(1); });
 
                 anchorGroup.add(anchor);
