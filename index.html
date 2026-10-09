@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Project Neegus: Web QA Pro V2</title>
+    <title>Project Neegus: Web QA Pro V4</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
     <script src="https://unpkg.com/konva@9.3.6/konva.min.js"></script>
@@ -15,9 +15,9 @@
 </head>
 <body class="p-8 flex flex-col items-center">
 
-    <h1 class="text-3xl font-bold mb-2 text-green-400">YOLO Web QA Tool (Pro V3)</h1>
+    <h1 class="text-3xl font-bold mb-2 text-green-400">YOLO Web QA Tool (Pro V4)</h1>
     <p class="mb-4 text-sm text-gray-400">
-        <b>Left-Click + Drag</b> dots to move. <b>Double-Click a Dot</b> to delete it. <b>Right-Click the Canvas</b> near the line to add a dot.
+        <b>Left-Click + Drag</b> dots. <b>Right-Click Canvas</b> to add dot. <b>[T]</b> Toggle dots. <b>[R]</b> Reset to Box.
     </p>
 
     <!-- Dropdown for Skins -->
@@ -35,13 +35,12 @@
     
     <div id="controls" class="flex items-center gap-4 mb-4">
         <button id="btn-prev" class="bg-gray-600 px-4 py-2 rounded font-bold hover:bg-gray-500 hidden">&larr; Prev</button>
-        
         <span id="counter" class="font-bold text-xl w-32 text-center text-gray-300">Loading...</span>
-        
         <button id="btn-next" class="bg-gray-600 px-4 py-2 rounded font-bold hover:bg-gray-500 hidden">Skip &rarr;</button>
     </div>
 
     <div class="flex gap-4 mb-6">
+        <button id="btn-reset-mask" class="bg-purple-600 px-4 py-2 rounded font-bold hover:bg-purple-500 hidden">Reset to Box (R)</button>
         <button id="btn-approve" class="bg-green-500 px-6 py-2 rounded font-bold text-lg hover:bg-green-400 hidden">Save & Next</button>
         <button id="btn-reject" class="bg-red-500 px-4 py-2 rounded font-bold hover:bg-red-400 hidden">Reject</button>
     </div>
@@ -57,8 +56,12 @@
         let currentIndex = 0;
         
         let points = [];
-        let stage, layer, imageObj, imageNode, polygon, anchorGroup;
+        let stage, layer, imageObj, imageNode, polygon, anchorGroup, tempRect;
         
+        // Box Drawing State
+        let isDrawingBox = false;
+        let boxStartX = 0, boxStartY = 0;
+
         const CANVAS_WIDTH = 1000;
         const CANVAS_HEIGHT = 700;
 
@@ -83,6 +86,11 @@
             let proj = projectPointToSegment(p, v, w);
             return dist2(p, proj);
         }
+        function getRelativePointer() {
+            const transform = stage.getAbsoluteTransform().copy();
+            transform.invert();
+            return transform.point(stage.getPointerPosition());
+        }
 
         // Supabase Connection
         const sb = supabase.createClient(
@@ -95,6 +103,7 @@
         const btnNext = document.getElementById('btn-next');
         const btnApprove = document.getElementById('btn-approve');
         const btnReject = document.getElementById('btn-reject');
+        const btnResetMask = document.getElementById('btn-reset-mask');
         const counterText = document.getElementById('counter');
         const statusText = document.getElementById('status');
         const skinSelect = document.getElementById('skin-select');
@@ -108,10 +117,8 @@
                 btnSkinReset.classList.add('hidden');
                 return;
             }
-            
             const skinTasks = allTasks.filter(t => t.skin_name === selectedSkin);
             const isFinished = skinTasks.every(t => t.status !== 'pending');
-            
             if (isFinished) {
                 btnSkinDone.classList.add('hidden');
                 btnSkinReset.classList.remove('hidden');
@@ -124,15 +131,12 @@
         function updateDropdown() {
             const optPending = document.getElementById('opt-pending');
             const optFinished = document.getElementById('opt-finished');
-            
-            // Save current selection
             const currentSelection = skinSelect.value;
             
             optPending.innerHTML = '';
             optFinished.innerHTML = '';
             
             const uniqueSkins = [...new Set(allTasks.map(t => t.skin_name))];
-            
             uniqueSkins.forEach(skin => {
                 const skinTasks = allTasks.filter(t => t.skin_name === skin);
                 const isFinished = skinTasks.every(t => t.status !== 'pending');
@@ -142,30 +146,20 @@
                 opt.value = skin;
                 opt.innerText = `${skin} (${approvedCount}/${skinTasks.length})`;
                 
-                if (isFinished) {
-                    optFinished.appendChild(opt);
-                } else {
-                    optPending.appendChild(opt);
-                }
+                if (isFinished) optFinished.appendChild(opt);
+                else optPending.appendChild(opt);
             });
-            
-            // Restore selection
             skinSelect.value = currentSelection;
             updateButtonVisibility();
         }
 
-        // Load all tasks on startup
         async function initApp() {
             const { data, error } = await sb.from('qa_tasks').select('*').order('filename');
-            if(error || !data || data.length === 0) {
-                counterText.innerText = "No Tasks";
-                return;
-            }
+            if(error || !data || data.length === 0) { counterText.innerText = "No Tasks"; return; }
             allTasks = data;
             tasks = allTasks;
             
             updateDropdown();
-            
             let firstPending = tasks.findIndex(t => t.status === 'pending');
             currentIndex = firstPending !== -1 ? firstPending : 0;
             
@@ -173,31 +167,25 @@
             btnNext.classList.remove('hidden');
             btnApprove.classList.remove('hidden');
             btnReject.classList.remove('hidden');
+            btnResetMask.classList.remove('hidden');
             
             loadCurrentTask();
         }
 
-        // Dropdown Listener
         skinSelect.addEventListener('change', (e) => {
             const selected = e.target.value;
-            if (selected === 'all') {
-                tasks = allTasks;
-            } else {
-                tasks = allTasks.filter(t => t.skin_name === selected);
-            }
+            tasks = selected === 'all' ? allTasks : allTasks.filter(t => t.skin_name === selected);
             updateButtonVisibility();
             let firstPending = tasks.findIndex(t => t.status === 'pending');
             currentIndex = firstPending !== -1 ? firstPending : 0;
             loadCurrentTask();
         });
         
-        // Mark Skin as Done Button
         btnSkinDone.addEventListener('click', async () => {
             const selectedSkin = skinSelect.value;
             if(selectedSkin === 'all') return;
-            
             if(!confirm(`Are you sure you want to approve all remaining frames for ${selectedSkin}?`)) return;
-            statusText.innerText = `Approving all remaining frames for ${selectedSkin}...`;
+            statusText.innerText = `Approving...`;
             
             const { error } = await sb.from('qa_tasks').update({ status: 'approved' }).eq('skin_name', selectedSkin).eq('status', 'pending');
             if(error) { alert("Database error."); return; }
@@ -207,15 +195,12 @@
             skinSelect.dispatchEvent(new Event('change'));
         });
 
-        // Add Back to Tasks Button
         btnSkinReset.addEventListener('click', async () => {
             const selectedSkin = skinSelect.value;
             if(selectedSkin === 'all') return;
-            
             if(!confirm(`Are you sure you want to move ${selectedSkin} back to the Pending queue?`)) return;
-            statusText.innerText = `Moving ${selectedSkin} back to tasks...`;
+            statusText.innerText = `Moving...`;
             
-            // Reset all frames for this skin back to pending
             const { error } = await sb.from('qa_tasks').update({ status: 'pending' }).eq('skin_name', selectedSkin);
             if(error) { alert("Database error."); return; }
             
@@ -224,11 +209,16 @@
             skinSelect.dispatchEvent(new Event('change'));
         });
 
+        function clearMask() {
+            points = [];
+            drawAnchors();
+            statusText.innerText = "Click and Drag to draw a new bounding box...";
+            stage.draggable(false); // Disable stage panning so we can drag the box
+        }
+        btnResetMask.addEventListener('click', clearMask);
+
         function loadCurrentTask() {
-            if(tasks.length === 0) {
-                statusText.innerText = "No tasks for this skin.";
-                return;
-            }
+            if(tasks.length === 0) { statusText.innerText = "No tasks for this skin."; return; }
 
             const task = tasks[currentIndex];
             counterText.innerText = `${currentIndex + 1} / ${tasks.length}`;
@@ -236,12 +226,15 @@
             
             stage.scale({x: 1, y: 1});
             stage.position({x: 0, y: 0});
+            stage.draggable(true); // Re-enable panning
+            isDrawingBox = false;
 
             layer.destroyChildren();
             anchorGroup.destroyChildren();
             
+            tempRect = new Konva.Rect({ stroke: '#4ade80', strokeWidth: 2, dash: [5, 5], visible: false });
+
             const { data: fileData } = sb.storage.from('dataset_frames').getPublicUrl(task.filename);
-            
             imageObj = new Image();
             imageObj.crossOrigin = "Anonymous";
             imageObj.src = fileData.publicUrl;
@@ -270,6 +263,7 @@
                 });
                 layer.add(polygon);
                 layer.add(anchorGroup);
+                layer.add(tempRect);
 
                 drawAnchors();
             };
@@ -283,8 +277,7 @@
                 const anchor = new Konva.Circle({
                     x: points[i], y: points[i+1],
                     radius: 2, fill: 'white', stroke: '#4ade80', strokeWidth: 2,
-                    draggable: true,
-                    name: i.toString()
+                    draggable: true, name: i.toString()
                 });
 
                 anchor.on('dragmove', function () {
@@ -299,17 +292,8 @@
                     drawAnchors();
                 });
 
-                // Translucency & smaller scale on hover
-                anchor.on('mouseover', function () { 
-                    document.body.style.cursor = 'pointer'; 
-                    this.scale({x:1.5, y:1.5}); 
-                    this.opacity(0.3);
-                });
-                anchor.on('mouseout', function () { 
-                    document.body.style.cursor = 'default'; 
-                    this.scale({x:1, y:1}); 
-                    this.opacity(1);
-                });
+                anchor.on('mouseover', function () { document.body.style.cursor = 'pointer'; this.scale({x:3, y:3}); this.opacity(0.3); });
+                anchor.on('mouseout', function () { document.body.style.cursor = 'default'; this.scale({x:1, y:1}); this.opacity(1); });
 
                 anchorGroup.add(anchor);
             }
@@ -317,41 +301,78 @@
 
         document.getElementById('canvas-container').addEventListener('contextmenu', e => e.preventDefault());
 
+        // Mouse Events
         stage.on('mousedown', (e) => {
-            if(e.evt.button !== 2) return;
             if(e.target.className === 'Circle') return;
             
-            const transform = stage.getAbsoluteTransform().copy();
-            transform.invert();
-            const pos = transform.point(stage.getPointerPosition());
-            
-            let minDist = Infinity;
-            let insertIdx = 0;
-            let snappedPoint = {x: pos.x, y: pos.y};
-            
-            for(let i=0; i<points.length; i+=2) {
-                let x1 = points[i], y1 = points[i+1];
-                let nextI = (i+2) % points.length;
-                let x2 = points[nextI], y2 = points[nextI+1];
-                
-                let proj = projectPointToSegment(pos, {x:x1, y:y1}, {x:x2, y:y2});
-                let distSq = dist2(pos, proj);
-                
-                if(distSq < minDist) {
-                    minDist = distSq;
-                    insertIdx = i + 2;
-                    snappedPoint = proj;
-                }
+            // 1. Box Drawing Mode (Left Click when Empty)
+            if(points.length === 0 && e.evt.button === 0) {
+                isDrawingBox = true;
+                const pos = getRelativePointer();
+                boxStartX = pos.x;
+                boxStartY = pos.y;
+                tempRect.position({x: boxStartX, y: boxStartY});
+                tempRect.width(0);
+                tempRect.height(0);
+                tempRect.visible(true);
+                return;
             }
             
-            points.splice(insertIdx, 0, snappedPoint.x, snappedPoint.y);
+            // 2. Add Dot Mode (Right Click)
+            if(e.evt.button === 2 && points.length > 0) {
+                const pos = getRelativePointer();
+                let minDist = Infinity;
+                let insertIdx = 0;
+                let snappedPoint = {x: pos.x, y: pos.y};
+                
+                for(let i=0; i<points.length; i+=2) {
+                    let x1 = points[i], y1 = points[i+1];
+                    let nextI = (i+2) % points.length;
+                    let x2 = points[nextI], y2 = points[nextI+1];
+                    let proj = projectPointToSegment(pos, {x:x1, y:y1}, {x:x2, y:y2});
+                    let distSq = dist2(pos, proj);
+                    if(distSq < minDist) { minDist = distSq; insertIdx = i + 2; snappedPoint = proj; }
+                }
+                points.splice(insertIdx, 0, snappedPoint.x, snappedPoint.y);
+                drawAnchors();
+            }
+        });
+
+        stage.on('mousemove', (e) => {
+            if(!isDrawingBox) return;
+            const pos = getRelativePointer();
+            tempRect.width(pos.x - boxStartX);
+            tempRect.height(pos.y - boxStartY);
+        });
+
+        stage.on('mouseup', (e) => {
+            if(!isDrawingBox) return;
+            isDrawingBox = false;
+            tempRect.visible(false);
+            
+            const pos = getRelativePointer();
+            
+            // Convert rect to a 4-point polygon
+            points = [
+                boxStartX, boxStartY,
+                pos.x, boxStartY,
+                pos.x, pos.y,
+                boxStartX, pos.y
+            ];
+            
+            stage.draggable(true); // Re-enable panning
             drawAnchors();
+            statusText.innerText = "Box generated! Adjust the corners if needed.";
         });
 
         async function saveTask(newStatus) {
+            if(points.length < 6) {
+                alert("A mask must have at least 3 points!");
+                return;
+            }
+        
             const task = tasks[currentIndex];
             statusText.innerText = "Saving to Database...";
-            
             const w = imageNode.width();
             const h = imageNode.height();
             const startX = imageNode.x();
@@ -364,21 +385,13 @@
                 newYoloStr += ` ${nx.toFixed(6)} ${ny.toFixed(6)}`;
             }
 
-            const { error } = await sb.from('qa_tasks').update({ 
-                status: newStatus, yolo_coordinates: newYoloStr 
-            }).eq('id', task.id);
-
+            const { error } = await sb.from('qa_tasks').update({ status: newStatus, yolo_coordinates: newYoloStr }).eq('id', task.id);
             if(error) { alert("Error saving!"); return; }
 
             task.status = newStatus;
             task.yolo_coordinates = newYoloStr;
-            
-            // Automatically find and update the task in the allTasks array as well
             let masterTask = allTasks.find(t => t.id === task.id);
-            if(masterTask) {
-                masterTask.status = newStatus;
-                masterTask.yolo_coordinates = newYoloStr;
-            }
+            if(masterTask) { masterTask.status = newStatus; masterTask.yolo_coordinates = newYoloStr; }
             
             updateDropdown();
             btnNext.click();
@@ -394,6 +407,7 @@
             const key = e.key.toLowerCase();
             if(key === 'a') btnPrev.click();
             if(key === 'd') btnNext.click();
+            if(key === 'r') clearMask();
             if(key === 't') {
                 const isVisible = anchorGroup.visible();
                 anchorGroup.visible(!isVisible);
