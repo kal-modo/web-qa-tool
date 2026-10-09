@@ -255,7 +255,9 @@
             
             if (newStatus === 'rejected') {
                 // Instantly remove it from the site
-                sb.from('qa_tasks').update({ status: 'rejected', yolo_coordinates: '0' }).eq('id', task.id).then();
+                sb.from('qa_tasks').update({ status: 'rejected', yolo_coordinates: '0' }).eq('id', task.id).then(res => {
+                    if (res.error) alert("Database Error: " + res.error.message);
+                });
                 allTasks = allTasks.filter(t => t.id !== task.id);
                 tasks = tasks.filter(t => t.id !== task.id);
                 
@@ -293,7 +295,10 @@
             if(masterTask) { masterTask.yolo_coordinates = newYoloStr; masterTask.status = newStatus; }
             
             // Fire and forget database update
-            sb.from('qa_tasks').update({ yolo_coordinates: newYoloStr, status: newStatus }).eq('id', task.id).then(() => updateDropdown());
+            sb.from('qa_tasks').update({ yolo_coordinates: newYoloStr, status: newStatus }).eq('id', task.id).then(res => {
+                if (res.error) alert("Database Error: " + res.error.message);
+                updateDropdown();
+            });
             
             // 2. Change Index
             if (direction === 'prev' && currentIndex > 0) currentIndex--;
