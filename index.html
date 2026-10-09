@@ -188,6 +188,7 @@
         }
 
         skinSelect.addEventListener('change', (e) => {
+            navigate('save_only');
             const selected = e.target.value;
             tasks = allTasks.filter(t => t.skin_name === selected);
             updateButtonVisibility();
@@ -313,6 +314,8 @@
                 if (res.error) alert("Database Error: " + res.error.message);
                 updateDropdown();
             });
+            
+            if (direction === 'save_only') return;
             
             // 2. Change Index
             if (direction === 'prev' && currentIndex > 0) currentIndex--;
