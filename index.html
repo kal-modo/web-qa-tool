@@ -247,32 +247,39 @@
         function navigate(direction, targetIndex = null, forceStatus = null) {
             if (tasks.length === 0) return;
             
-            // 1. Implicitly save the current frame
             const task = tasks[currentIndex];
-            if (points.length >= 6 && imageNode) {
-                const w = imageNode.width();
-                const h = imageNode.height();
-                const startX = imageNode.x();
-                const startY = imageNode.y();
-                let newYoloStr = "0";
-                
-                for(let i=0; i<points.length; i+=2) {
-                    let nx = Math.max(0, Math.min(1, (points[i] - startX) / w));
-                    let ny = Math.max(0, Math.min(1, (points[i+1] - startY) / h));
-                    newYoloStr += ` ${nx.toFixed(6)} ${ny.toFixed(6)}`;
+            let newStatus = forceStatus || (task.status === 'pending' ? 'approved' : task.status);
+            let newYoloStr = task.yolo_coordinates; // Fallback to current if invalid
+            
+            if (imageNode) {
+                if (points.length >= 6) {
+                    const w = imageNode.width();
+                    const h = imageNode.height();
+                    const startX = imageNode.x();
+                    const startY = imageNode.y();
+                    newYoloStr = "0";
+                    
+                    for(let i=0; i<points.length; i+=2) {
+                        let nx = Math.max(0, Math.min(1, (points[i] - startX) / w));
+                        let ny = Math.max(0, Math.min(1, (points[i+1] - startY) / h));
+                        newYoloStr += ` ${nx.toFixed(6)} ${ny.toFixed(6)}`;
+                    }
+                } else if (newStatus !== 'rejected') {
+                    alert("A mask must have at least 3 dots! Press R to draw a box, or click Reject if there is no character.");
+                    return; // Abort navigation
+                } else {
+                    newYoloStr = "0"; // Blank mask for rejected frames
                 }
-                
-                // If they navigate away from a pending frame, auto-approve it
-                let newStatus = forceStatus || (task.status === 'pending' ? 'approved' : task.status);
-                task.yolo_coordinates = newYoloStr;
-                task.status = newStatus;
-                
-                let masterTask = allTasks.find(t => t.id === task.id);
-                if(masterTask) { masterTask.yolo_coordinates = newYoloStr; masterTask.status = newStatus; }
-                
-                // Fire and forget database update
-                sb.from('qa_tasks').update({ yolo_coordinates: newYoloStr, status: newStatus }).eq('id', task.id).then(() => updateDropdown());
             }
+            
+            task.yolo_coordinates = newYoloStr;
+            task.status = newStatus;
+            
+            let masterTask = allTasks.find(t => t.id === task.id);
+            if(masterTask) { masterTask.yolo_coordinates = newYoloStr; masterTask.status = newStatus; }
+            
+            // Fire and forget database update
+            sb.from('qa_tasks').update({ yolo_coordinates: newYoloStr, status: newStatus }).eq('id', task.id).then(() => updateDropdown());
             
             // 2. Change Index
             if (direction === 'prev' && currentIndex > 0) currentIndex--;
