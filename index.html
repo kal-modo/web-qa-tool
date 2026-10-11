@@ -18,14 +18,13 @@
 
     <h1 class="text-3xl font-bold mb-2 text-green-400">YOLO Web QA Tool (Pro V4)</h1>
     <p class="mb-4 text-sm text-gray-400">
-        <b>Left-Click + Drag</b> dots. <b>[Ctrl + Drag]</b> Move mask. <b>Right-Click Canvas</b> to add dot. <b>[W]</b> Approve. <b>[F]</b> Rerun. <b>[C]</b> Copy Mask. <b>[V]</b> Paste Mask. <b>[T]</b> Toggle dots. <b>[R]</b> Reset to Box. <b>[Z]</b> Undo.
+        <b>Click & Drag Canvas</b> to draw character box. <b>[W]</b> Approve. <b>[A]</b> Prev. <b>[D]</b> Skip. <b>[R]</b> Re-box. <b>[Z]</b> Undo.
     </p>
 
     <!-- Dropdown for Skins -->
     <div class="flex gap-4 mb-4 items-center bg-gray-800 p-3 rounded shadow">
         <label for="skin-select" class="text-gray-300 font-bold">Filter Skin:</label>
         <select id="skin-select" class="p-2 rounded text-black font-bold w-64">
-            <optgroup id="opt-rerun" label="Needs Rerun"></optgroup>
             <optgroup id="opt-pending" label="Pending Skins"></optgroup>
             <optgroup id="opt-finished" label="Finished Tagging"></optgroup>
         </select>
@@ -48,9 +47,8 @@
 
     <div class="flex gap-4 mb-6">
         <button id="btn-undo" class="bg-blue-600 px-6 py-2 rounded font-bold hover:bg-blue-500 hidden text-white shadow">Undo (Z)</button>
-        <button id="btn-reset-mask" class="bg-purple-600 px-4 py-2 rounded font-bold hover:bg-purple-500 hidden">Reset to Box (R)</button>
+        <button id="btn-reset-mask" class="bg-purple-600 px-4 py-2 rounded font-bold hover:bg-purple-500 hidden">Re-Box (R)</button>
         <button id="btn-approve" class="bg-green-500 px-6 py-2 rounded font-bold text-lg hover:bg-green-400 hidden">Approve (W)</button>
-        <button id="btn-rerun" class="bg-orange-500 px-5 py-2 rounded font-bold text-lg hover:bg-orange-400 hidden text-white shadow">Add to Rerun (F)</button>
         <button id="btn-reject" class="bg-red-500 px-4 py-2 rounded font-bold hover:bg-red-400 hidden">Reject</button>
     </div>
 
@@ -115,7 +113,6 @@
         const btnPrev = document.getElementById('btn-prev');
         const btnNext = document.getElementById('btn-next');
         const btnApprove = document.getElementById('btn-approve');
-        const btnRerun = document.getElementById('btn-rerun');
         const btnReject = document.getElementById('btn-reject');
         const btnResetMask = document.getElementById('btn-reset-mask');
         const btnUndo = document.getElementById('btn-undo');
@@ -131,7 +128,7 @@
             if (!selectedSkin) return;
             
             const skinTasks = allTasks.filter(t => t.skin_name === selectedSkin);
-            const isFinished = skinTasks.every(t => t.status !== 'pending' && t.status !== 'rerun');
+            const isFinished = skinTasks.every(t => t.status !== 'pending');
             if (isFinished) {
                 btnSkinDone.classList.add('hidden');
                 btnSkinReset.classList.remove('hidden');
@@ -142,42 +139,29 @@
         }
         
         function updateDropdown() {
-            const optRerun = document.getElementById('opt-rerun');
             const optPending = document.getElementById('opt-pending');
             const optFinished = document.getElementById('opt-finished');
             const currentSelection = skinSelect.value;
             
-            optRerun.innerHTML = '';
             optPending.innerHTML = '';
             optFinished.innerHTML = '';
             
             const uniqueSkins = [...new Set(allTasks.map(t => t.skin_name))];
             uniqueSkins.forEach(skin => {
                 const skinTasks = allTasks.filter(t => t.skin_name === skin);
-                const rerunCount = skinTasks.filter(t => t.status === 'rerun').length;
                 const approvedCount = skinTasks.filter(t => t.status === 'approved').length;
-                const isFinished = skinTasks.every(t => t.status !== 'pending' && t.status !== 'rerun');
+                const isFinished = skinTasks.every(t => t.status !== 'pending');
                 
                 const opt = document.createElement('option');
                 opt.value = skin;
+                opt.innerText = `${skin} (${approvedCount}/${skinTasks.length})`;
                 
-                if (rerunCount > 0) {
-                    opt.innerText = `${skin} (${rerunCount} Rerun Needed)`;
-                    optRerun.appendChild(opt);
-                } else if (isFinished) {
-                    opt.innerText = `${skin} (${approvedCount}/${skinTasks.length})`;
+                if (isFinished) {
                     optFinished.appendChild(opt);
                 } else {
-                    opt.innerText = `${skin} (${approvedCount}/${skinTasks.length})`;
                     optPending.appendChild(opt);
                 }
             });
-            
-            if (optRerun.children.length === 0) {
-                optRerun.style.display = 'none';
-            } else {
-                optRerun.style.display = 'block';
-            }
             
             // If the previously selected skin still exists, keep it, otherwise default to first
             if (uniqueSkins.includes(currentSelection)) {
@@ -204,7 +188,6 @@
             btnPrev.classList.remove('hidden');
             btnNext.classList.remove('hidden');
             btnApprove.classList.remove('hidden');
-            btnRerun.classList.remove('hidden');
             btnReject.classList.remove('hidden');
             btnResetMask.classList.remove('hidden');
             btnUndo.classList.remove('hidden');
@@ -511,6 +494,14 @@
                 layer.add(tempRect);
 
                 drawAnchors();
+
+                // If blank frame / no mask, automatically arm the Box Tool!
+                if (points.length < 6) {
+                    stage.draggable(false);
+                    statusText.innerText = `[Blank Frame] Click and drag a box around the character... | ${task.filename}`;
+                } else {
+                    stage.draggable(true);
+                }
             };
         }
 
@@ -654,7 +645,6 @@
             if(key === 'a') navigate('prev');
             if(key === 'd') navigate('next');
             if(key === 'w') navigate('next', null, 'approved');
-            if(key === 'f') navigate('next', null, 'rerun');
             if(key === 'c') copyMask();
             if(key === 'v') pasteMask();
             if(key === 'r') clearMask();
