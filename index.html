@@ -388,11 +388,11 @@
                         let ny = Math.max(0, Math.min(1, (points[i+1] - startY) / h));
                         newYoloStr += ` ${nx.toFixed(6)} ${ny.toFixed(6)}`;
                     }
-                } else if (newStatus !== 'rejected') {
-                    alert("A mask must have at least 3 dots! Press R to draw a box, or click Reject if there is no character.");
-                    return; // Abort navigation
+                } else if (newStatus === 'approved') {
+                    alert("Draw a box around the character before approving! (Or click Reject if there is no character).");
+                    return; // Only block if approving without a box/mask
                 } else {
-                    newYoloStr = "0"; // Blank mask for rejected frames
+                    newYoloStr = task.yolo_coordinates; // Keep existing coords (e.g. '0' for blank frames)
                 }
             }
             
