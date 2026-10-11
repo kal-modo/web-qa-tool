@@ -18,7 +18,7 @@
 
     <h1 class="text-3xl font-bold mb-2 text-green-400">YOLO Web QA Tool (Pro V4)</h1>
     <p class="mb-4 text-sm text-gray-400">
-        <b>Left-Click + Drag</b> dots. <b>Right-Click Canvas</b> to add dot. <b>[T]</b> Toggle dots. <b>[R]</b> Reset to Box. <b>[Z]</b> Undo.
+        <b>Left-Click + Drag</b> dots. <b>Right-Click Canvas</b> to add dot. <b>[W]</b> Approve. <b>[C]</b> Copy Mask. <b>[V]</b> Paste Mask. <b>[T]</b> Toggle dots. <b>[R]</b> Reset to Box. <b>[Z]</b> Undo.
     </p>
 
     <!-- Dropdown for Skins -->
@@ -48,7 +48,7 @@
     <div class="flex gap-4 mb-6">
         <button id="btn-undo" class="bg-blue-600 px-6 py-2 rounded font-bold hover:bg-blue-500 hidden text-white shadow">Undo (Z)</button>
         <button id="btn-reset-mask" class="bg-purple-600 px-4 py-2 rounded font-bold hover:bg-purple-500 hidden">Reset to Box (R)</button>
-        <button id="btn-approve" class="bg-green-500 px-6 py-2 rounded font-bold text-lg hover:bg-green-400 hidden">Save & Next</button>
+        <button id="btn-approve" class="bg-green-500 px-6 py-2 rounded font-bold text-lg hover:bg-green-400 hidden">Approve (W)</button>
         <button id="btn-reject" class="bg-red-500 px-4 py-2 rounded font-bold hover:bg-red-400 hidden">Reject</button>
     </div>
 
@@ -64,6 +64,7 @@
         
         let points = [];
         let pointsHistory = [];
+        let copiedMask = null;
         let stage, layer, imageObj, imageNode, polygon, anchorGroup, tempRect;
         
         let isImageLoading = false;
@@ -257,12 +258,52 @@
         }
         btnResetMask.addEventListener('click', clearMask);
 
+        // Copy / Paste Mask
+        function copyMask() {
+            if (!imageNode || points.length < 6) {
+                statusText.innerText = "No valid mask to copy!";
+                return;
+            }
+            const w = imageNode.width();
+            const h = imageNode.height();
+            const startX = imageNode.x();
+            const startY = imageNode.y();
+            let normPoints = [];
+            for (let i = 0; i < points.length; i += 2) {
+                normPoints.push(
+                    Math.max(0, Math.min(1, (points[i] - startX) / w)),
+                    Math.max(0, Math.min(1, (points[i+1] - startY) / h))
+                );
+            }
+            copiedMask = normPoints;
+            statusText.innerText = `Mask copied (${normPoints.length / 2} points)! Press [V] on any frame to paste.`;
+        }
+
+        function pasteMask() {
+            if (!copiedMask || copiedMask.length < 6) {
+                statusText.innerText = "No mask in clipboard! Press [C] to copy a mask first.";
+                return;
+            }
+            if (!imageNode) return;
+            saveState(); // Allow undoing the paste
+            const w = imageNode.width();
+            const h = imageNode.height();
+            const startX = imageNode.x();
+            const startY = imageNode.y();
+            points = [];
+            for (let i = 0; i < copiedMask.length; i += 2) {
+                points.push(startX + (copiedMask[i] * w), startY + (copiedMask[i+1] * h));
+            }
+            drawAnchors();
+            statusText.innerText = "Mask pasted from clipboard! Remember to save or approve.";
+        }
+
         // Core Navigation and Auto-Saving Logic
         function navigate(direction, targetIndex = null, forceStatus = null) {
             if (tasks.length === 0 || isImageLoading) return;
             
             const task = tasks[currentIndex];
-            let newStatus = forceStatus || (task.status === 'pending' ? 'approved' : task.status);
+            let newStatus = forceStatus !== null ? forceStatus : task.status;
             let newYoloStr = task.yolo_coordinates; // Fallback to current if invalid
             
             if (newStatus === 'rejected') {
@@ -505,6 +546,9 @@
             const key = e.key.toLowerCase();
             if(key === 'a') navigate('prev');
             if(key === 'd') navigate('next');
+            if(key === 'w') navigate('next', null, 'approved');
+            if(key === 'c') copyMask();
+            if(key === 'v') pasteMask();
             if(key === 'r') clearMask();
             if(key === 'z') applyUndo();
             if(key === 't') {
