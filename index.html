@@ -3,34 +3,44 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Project Neegus: Web QA Pro V4</title>
+    <title>Project Neegus: Web QA Pro V5 (Annotate & Edit)</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
     <script src="https://unpkg.com/konva@9.3.6/konva.min.js"></script>
 
     <style>
         body { background-color: #1e1e2f; color: white; user-select: none; }
-        #canvas-container { border: 2px solid #4ade80; background-color: #2d2d44; }
+        #canvas-container { border: 2px solid #4ade80; background-color: #2d2d44; position: relative; }
         input[type=number]::-webkit-inner-spin-button { opacity: 1; }
+        .tab-btn.active { background-color: #22c55e; color: black; font-weight: bold; }
+        .tab-btn:not(.active) { background-color: #374151; color: #9ca3af; }
     </style>
 </head>
 <body class="p-8 flex flex-col items-center">
 
-    <h1 class="text-3xl font-bold mb-2 text-green-400">YOLO Web QA Tool (Pro V4)</h1>
-    <p class="mb-4 text-sm text-gray-400">
-        <b>Click & Drag Canvas</b> to draw character box. <b>[W]</b> Approve. <b>[A]</b> Prev. <b>[D]</b> Skip. <b>[R]</b> Re-box. <b>[Z]</b> Undo.
+    <h1 class="text-3xl font-bold mb-2 text-green-400">YOLO Web QA Tool (Pro V5)</h1>
+
+    <!-- Mode Tabs: Annotate vs Edit -->
+    <div class="flex gap-2 mb-4 bg-gray-800 p-1.5 rounded-lg border border-gray-700">
+        <button id="tab-annotate" class="tab-btn active px-6 py-2 rounded-md font-bold text-sm transition">1. Annotate (Box)</button>
+        <button id="tab-edit" class="tab-btn px-6 py-2 rounded-md font-bold text-sm transition">2. Edit (Polygon)</button>
+    </div>
+
+    <!-- Instructions banner (dynamic per mode) -->
+    <p id="mode-instructions" class="mb-4 text-sm text-gray-300 text-center max-w-2xl">
+        <b>[Annotate Mode]</b> Drag box around character body. <b>[D]</b> Next / Save. <b>[A]</b> Prev. <b>[R]</b> Re-box. <b>[Z]</b> Undo.
     </p>
 
-    <!-- Dropdown for Skins -->
-    <div class="flex gap-4 mb-4 items-center bg-gray-800 p-3 rounded shadow">
-        <label for="skin-select" class="text-gray-300 font-bold">Filter Skin:</label>
+    <!-- Dropdown for Skins & Actions -->
+    <div class="flex flex-wrap gap-4 mb-4 items-center bg-gray-800 p-3 rounded shadow">
+        <label for="skin-select" class="text-gray-300 font-bold">Skin:</label>
         <select id="skin-select" class="p-2 rounded text-black font-bold w-64">
-            <optgroup id="opt-pending" label="Pending Skins"></optgroup>
-            <optgroup id="opt-finished" label="Finished Tagging"></optgroup>
+            <optgroup id="opt-pending" label="Pending"></optgroup>
+            <optgroup id="opt-finished" label="Finished"></optgroup>
         </select>
         
-        <button id="btn-skin-done" class="bg-blue-600 px-4 py-2 rounded font-bold hover:bg-blue-500 ml-4 shadow hidden">Mark Skin as Done</button>
-        <button id="btn-skin-reset" class="bg-yellow-600 px-4 py-2 rounded font-bold hover:bg-yellow-500 ml-4 shadow hidden text-black">Add Back to Tasks</button>
+        <button id="btn-skin-done" class="bg-blue-600 px-4 py-2 rounded font-bold hover:bg-blue-500 ml-2 shadow hidden">Finish Skin</button>
+        <button id="btn-skin-reset" class="bg-yellow-600 px-4 py-2 rounded font-bold hover:bg-yellow-500 ml-2 shadow hidden text-black">Reset Skin</button>
     </div>
     
     <div id="controls" class="flex items-center gap-4 mb-4">
@@ -42,22 +52,25 @@
             <span class="text-gray-300 font-bold">/ <span id="total-frames">0</span></span>
         </div>
         
-        <button id="btn-next" class="bg-gray-600 px-4 py-2 rounded font-bold hover:bg-gray-500 hidden">Skip &rarr; (D)</button>
+        <button id="btn-next" class="bg-gray-600 px-4 py-2 rounded font-bold hover:bg-gray-500 hidden">Next &rarr; (D)</button>
     </div>
 
-    <div class="flex gap-4 mb-6">
-        <button id="btn-undo" class="bg-blue-600 px-6 py-2 rounded font-bold hover:bg-blue-500 hidden text-white shadow">Undo (Z)</button>
-        <button id="btn-reset-mask" class="bg-purple-600 px-4 py-2 rounded font-bold hover:bg-purple-500 hidden">Re-Box (R)</button>
+    <div class="flex flex-wrap gap-3 mb-6 items-center justify-center">
+        <button id="btn-undo" class="bg-blue-600 px-5 py-2 rounded font-bold hover:bg-blue-500 hidden text-white shadow">Undo (Z)</button>
+        <button id="btn-reset-mask" class="bg-purple-600 px-4 py-2 rounded font-bold hover:bg-purple-500 hidden">Clear / Re-Box (R)</button>
         <button id="btn-approve" class="bg-green-500 px-6 py-2 rounded font-bold text-lg hover:bg-green-400 hidden">Approve (W)</button>
         <button id="btn-reject" class="bg-red-500 px-4 py-2 rounded font-bold hover:bg-red-400 hidden">Reject</button>
     </div>
 
-    <div id="status" class="mb-4 text-green-300 font-bold"></div>
+    <div id="status" class="mb-4 text-green-300 font-bold min-h-[24px]"></div>
 
     <!-- The Interactive Canvas -->
     <div id="canvas-container" class="rounded shadow-lg"></div>
 
     <script>
+        // App Modes: 'annotate' (Big Boxes) | 'edit' (Polygon Nudging & Vertex Deletion)
+        let currentMode = 'annotate';
+        
         let allTasks = [];
         let tasks = [];
         let currentIndex = 0;
@@ -69,13 +82,16 @@
         
         let isImageLoading = false;
         
-        // Box Drawing State
+        // Box Drawing State (Annotate mode)
         let isDrawingBox = false;
         let boxStartX = 0, boxStartY = 0;
 
         // Mask Move State (Ctrl + Drag)
         let isMovingMask = false;
         let maskMoveLastPos = null;
+
+        // Vertex Eraser State (Hold Backspace)
+        let isHoldingBackspace = false;
 
         const CANVAS_WIDTH = 1000;
         const CANVAS_HEIGHT = 700;
@@ -110,6 +126,10 @@
         );
 
         // UI Elements
+        const tabAnnotate = document.getElementById('tab-annotate');
+        const tabEdit = document.getElementById('tab-edit');
+        const modeInstructions = document.getElementById('mode-instructions');
+
         const btnPrev = document.getElementById('btn-prev');
         const btnNext = document.getElementById('btn-next');
         const btnApprove = document.getElementById('btn-approve');
@@ -122,19 +142,92 @@
         const skinSelect = document.getElementById('skin-select');
         const btnSkinDone = document.getElementById('btn-skin-done');
         const btnSkinReset = document.getElementById('btn-skin-reset');
-        
+
+        // Helpers to classify task state
+        function isAnnotated(t) {
+            // Boxed: has 8 coords (4 corners) or status is 'annotated'
+            const parts = (t.yolo_coordinates || '').trim().split(/\s+/);
+            const numCoords = parts.length > 1 ? parts.length - 1 : 0;
+            return t.status === 'annotated' || numCoords === 8;
+        }
+
+        function isPendingAnnotation(t) {
+            if (t.status === 'approved' || t.status === 'pending_edit') return false;
+            return !isAnnotated(t);
+        }
+
+        function isPendingEdit(t) {
+            if (t.status === 'approved') return false;
+            // Either status explicitly set to pending_edit or has polygon (> 8 coords)
+            const parts = (t.yolo_coordinates || '').trim().split(/\s+/);
+            const numCoords = parts.length > 1 ? parts.length - 1 : 0;
+            return t.status === 'pending_edit' || (t.status !== 'annotated' && numCoords > 8);
+        }
+
+        function isFinishedEditing(t) {
+            return t.status === 'approved';
+        }
+
+        function updateModeUI() {
+            if (currentMode === 'annotate') {
+                tabAnnotate.classList.add('active');
+                tabEdit.classList.remove('active');
+                btnApprove.classList.add('hidden'); // Annotate mode does NOT need approve button
+                btnResetMask.innerText = "Re-Box (R)";
+                modeInstructions.innerHTML = `<b>[Annotate Mode]</b> Drag box around character body. <b>[D]</b> Next / Auto-Save. <b>[A]</b> Prev. <b>[R]</b> Re-box. <b>[Z]</b> Undo.`;
+                btnSkinDone.innerText = "Mark Skin as Finished Annotating";
+                btnSkinReset.innerText = "Reset Skin to Blank";
+            } else {
+                tabEdit.classList.add('active');
+                tabAnnotate.classList.remove('active');
+                btnApprove.classList.remove('hidden'); // Edit mode requires approval
+                btnResetMask.innerText = "Clear Mask (R)";
+                modeInstructions.innerHTML = `<b>[Edit Mode]</b> Drag dots to nudge. <b>Hold [Backspace] & Hover</b> over dots to rapidly delete. <b>[W]</b> Approve. <b>[D]</b> Skip. <b>[A]</b> Prev.`;
+                btnSkinDone.innerText = "Mark Skin as Finished Editing";
+                btnSkinReset.innerText = "Send Skin Back to Edit";
+            }
+            updateDropdown();
+        }
+
+        tabAnnotate.addEventListener('click', () => {
+            if (currentMode === 'annotate') return;
+            navigate('save_only');
+            currentMode = 'annotate';
+            updateModeUI();
+            skinSelect.dispatchEvent(new Event('change'));
+        });
+
+        tabEdit.addEventListener('click', () => {
+            if (currentMode === 'edit') return;
+            navigate('save_only');
+            currentMode = 'edit';
+            updateModeUI();
+            skinSelect.dispatchEvent(new Event('change'));
+        });
+
         function updateButtonVisibility() {
             const selectedSkin = skinSelect.value;
             if (!selectedSkin) return;
             
             const skinTasks = allTasks.filter(t => t.skin_name === selectedSkin);
-            const isFinished = skinTasks.every(t => t.status !== 'pending');
-            if (isFinished) {
-                btnSkinDone.classList.add('hidden');
-                btnSkinReset.classList.remove('hidden');
+            if (currentMode === 'annotate') {
+                const isFinished = skinTasks.every(t => isAnnotated(t) || t.status === 'approved' || t.status === 'pending_edit');
+                if (isFinished) {
+                    btnSkinDone.classList.add('hidden');
+                    btnSkinReset.classList.remove('hidden');
+                } else {
+                    btnSkinDone.classList.remove('hidden');
+                    btnSkinReset.classList.add('hidden');
+                }
             } else {
-                btnSkinDone.classList.remove('hidden');
-                btnSkinReset.classList.add('hidden');
+                const isFinished = skinTasks.every(t => t.status === 'approved');
+                if (isFinished) {
+                    btnSkinDone.classList.add('hidden');
+                    btnSkinReset.classList.remove('hidden');
+                } else {
+                    btnSkinDone.classList.remove('hidden');
+                    btnSkinReset.classList.add('hidden');
+                }
             }
         }
         
@@ -146,24 +239,40 @@
             optPending.innerHTML = '';
             optFinished.innerHTML = '';
             
+            if (currentMode === 'annotate') {
+                optPending.label = "Pending Annotation";
+                optFinished.label = "Finished Annotating";
+            } else {
+                optPending.label = "Pending Edit";
+                optFinished.label = "Finished Editing";
+            }
+            
             const uniqueSkins = [...new Set(allTasks.map(t => t.skin_name))];
             uniqueSkins.forEach(skin => {
                 const skinTasks = allTasks.filter(t => t.skin_name === skin);
-                const approvedCount = skinTasks.filter(t => t.status === 'approved').length;
-                const isFinished = skinTasks.every(t => t.status !== 'pending');
+                const total = skinTasks.length;
+                let doneCount = 0;
+                let isSkinDone = false;
+                
+                if (currentMode === 'annotate') {
+                    doneCount = skinTasks.filter(t => isAnnotated(t) || t.status === 'approved' || t.status === 'pending_edit').length;
+                    isSkinDone = (doneCount === total);
+                } else {
+                    doneCount = skinTasks.filter(t => t.status === 'approved').length;
+                    isSkinDone = (doneCount === total);
+                }
                 
                 const opt = document.createElement('option');
                 opt.value = skin;
-                opt.innerText = `${skin} (${approvedCount}/${skinTasks.length})`;
+                opt.innerText = `${skin} (${doneCount}/${total})`;
                 
-                if (isFinished) {
+                if (isSkinDone) {
                     optFinished.appendChild(opt);
                 } else {
                     optPending.appendChild(opt);
                 }
             });
             
-            // If the previously selected skin still exists, keep it, otherwise default to first
             if (uniqueSkins.includes(currentSelection)) {
                 skinSelect.value = currentSelection;
             } else if (skinSelect.options.length > 0) {
@@ -177,17 +286,15 @@
             if(error || !data || data.length === 0) { totalFrames.innerText = "0"; return; }
             allTasks = data;
             
-            updateDropdown();
+            updateModeUI();
             
             const initialSkin = skinSelect.value;
             tasks = allTasks.filter(t => t.skin_name === initialSkin);
             
-            let firstPending = tasks.findIndex(t => t.status === 'pending');
-            currentIndex = firstPending !== -1 ? firstPending : 0;
+            currentIndex = 0;
             
             btnPrev.classList.remove('hidden');
             btnNext.classList.remove('hidden');
-            btnApprove.classList.remove('hidden');
             btnReject.classList.remove('hidden');
             btnResetMask.classList.remove('hidden');
             btnUndo.classList.remove('hidden');
@@ -200,22 +307,57 @@
             const selected = e.target.value;
             tasks = allTasks.filter(t => t.skin_name === selected);
             updateButtonVisibility();
-            let firstPending = tasks.findIndex(t => t.status === 'pending');
-            currentIndex = firstPending !== -1 ? firstPending : 0;
+            
+            // Jump to first pending task for current mode
+            let targetIdx = -1;
+            if (currentMode === 'annotate') {
+                targetIdx = tasks.findIndex(t => isPendingAnnotation(t));
+            } else {
+                targetIdx = tasks.findIndex(t => t.status !== 'approved');
+            }
+            currentIndex = targetIdx !== -1 ? targetIdx : 0;
             loadCurrentTask();
-            e.target.blur(); // Remove focus so the A and D hotkeys don't get intercepted by the dropdown!
+            e.target.blur();
         });
         
         btnSkinDone.addEventListener('click', async () => {
             const selectedSkin = skinSelect.value;
             if(!selectedSkin) return;
-            if(!confirm(`Are you sure you want to approve all remaining frames for ${selectedSkin}?`)) return;
-            statusText.innerText = `Approving...`;
             
-            const { error } = await sb.from('qa_tasks').update({ status: 'approved' }).eq('skin_name', selectedSkin).eq('status', 'pending');
-            if(error) { alert("Database error."); return; }
+            if (currentMode === 'annotate') {
+                if(!confirm(`Mark all frames for ${selectedSkin} as Finished Annotating (Ready for SAM)?`)) return;
+                statusText.innerText = `Updating...`;
+                
+                // Set non-approved tasks with boxes to 'annotated'
+                const { error } = await sb.from('qa_tasks')
+                    .update({ status: 'annotated' })
+                    .eq('skin_name', selectedSkin)
+                    .neq('status', 'approved')
+                    .neq('status', 'rejected');
+                    
+                if(error) { alert("Database error: " + error.message); return; }
+                allTasks.forEach(t => { 
+                    if(t.skin_name === selectedSkin && t.status !== 'approved' && t.status !== 'rejected') {
+                        t.status = 'annotated'; 
+                    }
+                });
+            } else {
+                if(!confirm(`Approve all remaining frames for ${selectedSkin} (Finished Editing)?`)) return;
+                statusText.innerText = `Approving...`;
+                
+                const { error } = await sb.from('qa_tasks')
+                    .update({ status: 'approved' })
+                    .eq('skin_name', selectedSkin)
+                    .neq('status', 'rejected');
+                    
+                if(error) { alert("Database error: " + error.message); return; }
+                allTasks.forEach(t => { 
+                    if(t.skin_name === selectedSkin && t.status !== 'rejected') {
+                        t.status = 'approved'; 
+                    }
+                });
+            }
             
-            allTasks.forEach(t => { if(t.skin_name === selectedSkin && t.status === 'pending') t.status = 'approved'; });
             updateDropdown();
             skinSelect.dispatchEvent(new Event('change'));
         });
@@ -223,19 +365,24 @@
         btnSkinReset.addEventListener('click', async () => {
             const selectedSkin = skinSelect.value;
             if(!selectedSkin) return;
-            if(!confirm(`Are you sure you want to move ${selectedSkin} back to the Pending queue?`)) return;
-            statusText.innerText = `Moving...`;
             
-            const { error } = await sb.from('qa_tasks').update({ status: 'pending' }).eq('skin_name', selectedSkin);
-            if(error) { alert("Database error."); return; }
+            if (currentMode === 'annotate') {
+                if(!confirm(`Reset annotation status for ${selectedSkin} back to pending?`)) return;
+                statusText.innerText = `Resetting...`;
+                const { error } = await sb.from('qa_tasks').update({ status: 'pending' }).eq('skin_name', selectedSkin).neq('status', 'approved');
+                if(error) { alert("Database error: " + error.message); return; }
+                allTasks.forEach(t => { if(t.skin_name === selectedSkin && t.status !== 'approved') t.status = 'pending'; });
+            } else {
+                if(!confirm(`Send ${selectedSkin} back to Pending Edit?`)) return;
+                statusText.innerText = `Updating...`;
+                const { error } = await sb.from('qa_tasks').update({ status: 'pending_edit' }).eq('skin_name', selectedSkin);
+                if(error) { alert("Database error: " + error.message); return; }
+                allTasks.forEach(t => { if(t.skin_name === selectedSkin) t.status = 'pending_edit'; });
+            }
             
-            allTasks.forEach(t => { if(t.skin_name === selectedSkin) t.status = 'pending'; });
             updateDropdown();
             skinSelect.dispatchEvent(new Event('change'));
         });
-
-        // Navigation Undo Stack (Tracks Rerun / Approve / Status changes across frames)
-        let navHistory = [];
 
         // Undo System
         function saveState() {
@@ -244,59 +391,24 @@
         }
 
         function applyUndo() {
-            // First check if there is an in-frame point undo
             if (pointsHistory.length > 0) {
                 points = pointsHistory.pop();
                 drawAnchors();
-                statusText.innerText = "Undo applied (canvas points).";
-                return;
+                statusText.innerText = "Undo applied!";
+            } else {
+                statusText.innerText = "Nothing to undo in this frame.";
             }
-            
-            // Otherwise, check if we can undo the last navigation action (e.g. undo Add to Rerun)
-            if (navHistory.length > 0) {
-                const lastNav = navHistory.pop();
-                const targetTask = allTasks.find(t => t.id === lastNav.taskId);
-                if (targetTask) {
-                    targetTask.status = lastNav.prevStatus;
-                    targetTask.yolo_coordinates = lastNav.prevCoords;
-                    
-                    // Revert in database
-                    sb.from('qa_tasks').update({
-                        status: lastNav.prevStatus,
-                        yolo_coordinates: lastNav.prevCoords
-                    }).eq('id', targetTask.id).then(res => {
-                        if (res.error) alert("Database Error: " + res.error.message);
-                        updateDropdown();
-                    });
-                    
-                    // Jump back to that task
-                    const inCurrentListIdx = tasks.findIndex(t => t.id === targetTask.id);
-                    if (inCurrentListIdx !== -1) {
-                        currentIndex = inCurrentListIdx;
-                    }
-                    loadCurrentTask();
-                    statusText.innerText = `Undo: Reverted ${targetTask.filename} back to ${lastNav.prevStatus.toUpperCase()}!`;
-                    return;
-                }
-            }
-            
-            statusText.innerText = "Nothing to undo!";
         }
-        btnUndo.addEventListener('click', applyUndo);
-
-        btnPrev.addEventListener('click', () => navigate('prev'));
-        btnNext.addEventListener('click', () => navigate('next'));
-        btnApprove.addEventListener('click', () => navigate('next', null, 'approved'));
-        btnReject.addEventListener('click', () => navigate('next', null, 'rejected'));
 
         function clearMask() {
-            saveState(); // Allow undoing the clear
+            saveState();
             points = [];
-            drawAnchors();
-            statusText.innerText = "Click and Drag to draw a new bounding box...";
+            anchorGroup.destroyChildren();
+            polygon.points([]);
+            layer.batchDraw();
             stage.draggable(false);
+            statusText.innerText = "Mask cleared. Click and drag to draw a box.";
         }
-        btnResetMask.addEventListener('click', clearMask);
 
         // Copy / Paste Mask
         function copyMask() {
@@ -325,7 +437,7 @@
                 return;
             }
             if (!imageNode) return;
-            saveState(); // Allow undoing the paste
+            saveState();
             const w = imageNode.width();
             const h = imageNode.height();
             const startX = imageNode.x();
@@ -335,7 +447,7 @@
                 points.push(startX + (copiedMask[i] * w), startY + (copiedMask[i+1] * h));
             }
             drawAnchors();
-            statusText.innerText = "Mask pasted from clipboard! Remember to save or approve.";
+            statusText.innerText = "Mask pasted from clipboard!";
         }
 
         // Core Navigation and Auto-Saving Logic
@@ -344,21 +456,9 @@
             
             const task = tasks[currentIndex];
             let newStatus = forceStatus !== null ? forceStatus : task.status;
-            let newYoloStr = task.yolo_coordinates; // Fallback to current if invalid
-            
-            // Record to navHistory if a status transition occurs (e.g. marking Rerun or Approved)
-            if (forceStatus !== null && forceStatus !== task.status) {
-                navHistory.push({
-                    taskId: task.id,
-                    prevStatus: task.status,
-                    prevCoords: task.yolo_coordinates,
-                    prevIndex: currentIndex
-                });
-                if (navHistory.length > 20) navHistory.shift();
-            }
+            let newYoloStr = task.yolo_coordinates;
             
             if (newStatus === 'rejected') {
-                // Instantly remove it from the site
                 sb.from('qa_tasks').update({ status: 'rejected', yolo_coordinates: '0' }).eq('id', task.id).then(res => {
                     if (res.error) alert("Database Error: " + res.error.message);
                 });
@@ -378,7 +478,6 @@
                     const startX = imageNode.x();
                     const startY = imageNode.y();
                     
-                    // Preserve the original Class ID instead of hardcoding '0'
                     const origParts = task.yolo_coordinates.split(' ');
                     const classId = origParts.length > 0 ? origParts[0] : "0";
                     newYoloStr = classId;
@@ -388,11 +487,18 @@
                         let ny = Math.max(0, Math.min(1, (points[i+1] - startY) / h));
                         newYoloStr += ` ${nx.toFixed(6)} ${ny.toFixed(6)}`;
                     }
+
+                    // In Annotate mode: if box has 8 coordinates (4 points) and is not approved, set status = 'annotated'
+                    if (currentMode === 'annotate' && newStatus !== 'approved') {
+                        if (points.length === 8) {
+                            newStatus = 'annotated';
+                        }
+                    }
                 } else if (newStatus === 'approved') {
-                    alert("Draw a box around the character before approving! (Or click Reject if there is no character).");
-                    return; // Only block if approving without a box/mask
+                    alert("A character mask is required to approve this frame! (Or click Reject if there is no character).");
+                    return;
                 } else {
-                    newYoloStr = task.yolo_coordinates; // Keep existing coords (e.g. '0' for blank frames)
+                    newYoloStr = task.yolo_coordinates;
                 }
             }
             
@@ -419,32 +525,46 @@
             loadCurrentTask();
         }
 
-        // Frame Number Input Logic
+        btnPrev.addEventListener('click', () => navigate('prev'));
+        btnNext.addEventListener('click', () => navigate('next'));
+        btnApprove.addEventListener('click', () => navigate('next', null, 'approved'));
+        btnReject.addEventListener('click', () => {
+            if(confirm("Reject this frame? It will be removed from dataset.")) {
+                navigate('save_only', null, 'rejected');
+            }
+        });
+        btnResetMask.addEventListener('click', clearMask);
+        btnUndo.addEventListener('click', applyUndo);
+
         frameInput.addEventListener('change', (e) => {
-            let val = parseInt(e.target.value);
-            if(isNaN(val)) val = currentIndex + 1;
-            if(val < 1) val = 1;
+            let val = parseInt(e.target.value, 10);
+            if(isNaN(val) || val < 1) val = 1;
             if(val > tasks.length) val = tasks.length;
             navigate('jump', val - 1);
-            e.target.blur(); // Remove focus so hotkeys work
         });
 
         function loadCurrentTask() {
-            if(tasks.length === 0) { statusText.innerText = "No tasks for this skin."; return; }
+            if (tasks.length === 0) {
+                statusText.innerText = "No tasks found for this skin.";
+                frameInput.value = 0;
+                totalFrames.innerText = "0";
+                layer.destroyChildren();
+                layer.batchDraw();
+                return;
+            }
 
-            pointsHistory = []; // Reset undo history for the new frame
-            isImageLoading = true; // Lock navigation
-
+            isImageLoading = true;
+            pointsHistory = [];
+            
             const task = tasks[currentIndex];
             frameInput.value = currentIndex + 1;
             totalFrames.innerText = tasks.length;
             
-            statusText.innerText = `Status: ${task.status.toUpperCase()} | ${task.filename}`;
-            
-            stage.scale({x: 1, y: 1});
-            stage.position({x: 0, y: 0});
-            stage.draggable(true);
-            isDrawingBox = false;
+            statusText.innerText = `Loading ${task.filename}... [Status: ${task.status}]`;
+
+            // Reset canvas zoom & position
+            stage.scale({ x: 1, y: 1 });
+            stage.position({ x: 0, y: 0 });
 
             layer.destroyChildren();
             anchorGroup.destroyChildren();
@@ -453,17 +573,15 @@
 
             const { data: fileData } = sb.storage.from('dataset_frames').getPublicUrl(task.filename);
             
-            // Use a local image object to prevent race conditions during fast skipping
             const currentImg = new Image();
             currentImg.crossOrigin = "Anonymous";
             currentImg.src = fileData.publicUrl;
             
             currentImg.onload = () => {
-                // If the user somehow navigated away before this loaded, abort drawing it
                 if (tasks[currentIndex].id !== task.id) return;
                 
-                isImageLoading = false; // Unlock navigation
-                imageObj = currentImg; // Update global reference
+                isImageLoading = false;
+                imageObj = currentImg;
                 
                 const scale = Math.min(CANVAS_WIDTH / currentImg.width, CANVAS_HEIGHT / currentImg.height);
                 const w = currentImg.width * scale;
@@ -494,12 +612,18 @@
 
                 drawAnchors();
 
-                // If blank frame / no mask, automatically arm the Box Tool!
+                // Annotate mode & blank: enable box drawing
                 if (points.length < 6) {
                     stage.draggable(false);
-                    statusText.innerText = `[Blank Frame] Click and drag a box around the character... | ${task.filename}`;
+                    statusText.innerText = `[Blank] Click and drag box around character body | ${task.filename}`;
                 } else {
                     stage.draggable(true);
+                    const ptCount = points.length / 2;
+                    if (currentMode === 'edit') {
+                        statusText.innerText = `[Edit Mode] ${ptCount} vertices | Hold [Backspace] & hover to delete | ${task.filename}`;
+                    } else {
+                        statusText.innerText = `[Boxed] ${ptCount} points | ${task.filename}`;
+                    }
                 }
             };
         }
@@ -508,15 +632,19 @@
             anchorGroup.destroyChildren();
             polygon.points(points);
             
+            const isEditMode = (currentMode === 'edit');
+            const ptCount = points.length / 2;
+            const circleRadius = ptCount > 50 ? 2 : 3;
+            
             for(let i=0; i<points.length; i+=2) {
                 const anchor = new Konva.Circle({
                     x: points[i], y: points[i+1],
-                    radius: 2, fill: 'white', stroke: '#4ade80', strokeWidth: 2,
+                    radius: circleRadius, fill: 'white', stroke: '#4ade80', strokeWidth: 1.5,
                     draggable: true, name: i.toString()
                 });
 
                 anchor.on('dragstart', function () {
-                    saveState(); // Save state before dragging
+                    saveState();
                 });
 
                 anchor.on('dragmove', function () {
@@ -525,18 +653,45 @@
                     polygon.points(points);
                 });
 
+                // Double click deletes single point
                 anchor.on('dblclick', function (e) {
                     e.cancelBubble = true;
-                    saveState(); // Save state before removing a point
+                    if (points.length <= 6) {
+                        statusText.innerText = "Polygon must have at least 3 vertices!";
+                        return;
+                    }
+                    saveState();
                     points.splice(i, 2);
                     drawAnchors();
                 });
 
-                anchor.on('mouseover', function () { document.body.style.cursor = 'pointer'; this.scale({x:1.5, y:1.5}); this.opacity(0.3); });
-                anchor.on('mouseout', function () { document.body.style.cursor = 'default'; this.scale({x:1, y:1}); this.opacity(1); });
+                // Rapid vertex eraser: If holding Backspace, hovering deletes the vertex!
+                anchor.on('mouseenter', function (e) {
+                    if (isHoldingBackspace) {
+                        if (points.length <= 6) {
+                            statusText.innerText = "Minimum 3 vertices required!";
+                            return;
+                        }
+                        saveState();
+                        points.splice(i, 2);
+                        drawAnchors();
+                        statusText.innerText = `Deleted vertex! (${points.length / 2} remaining)`;
+                        return;
+                    }
+                    document.body.style.cursor = 'pointer';
+                    this.scale({x:1.8, y:1.8});
+                    this.opacity(0.3);
+                });
+
+                anchor.on('mouseleave', function () {
+                    document.body.style.cursor = 'default';
+                    this.scale({x:1, y:1});
+                    this.opacity(1);
+                });
 
                 anchorGroup.add(anchor);
             }
+            layer.batchDraw();
         }
 
         document.getElementById('canvas-container').addEventListener('contextmenu', e => e.preventDefault());
@@ -547,13 +702,14 @@
                 isMovingMask = true;
                 maskMoveLastPos = getRelativePointer();
                 stage.draggable(false);
-                saveState(); // Record for undo
+                saveState();
                 statusText.innerText = "Dragging entire mask... Release mouse to set.";
                 return;
             }
 
             if(e.target.className === 'Circle') return;
             
+            // In Annotate mode: Left click to draw bounding box
             if(points.length === 0 && e.evt.button === 0) {
                 isDrawingBox = true;
                 const pos = getRelativePointer();
@@ -566,8 +722,9 @@
                 return;
             }
             
+            // In Edit mode: Right click adds a new point to nearest edge
             if(e.evt.button === 2 && points.length > 0) {
-                saveState(); // Save state before right-clicking to add a new point
+                saveState();
                 
                 const pos = getRelativePointer();
                 let minDist = Infinity;
@@ -584,6 +741,7 @@
                 }
                 points.splice(insertIdx, 0, snappedPoint.x, snappedPoint.y);
                 drawAnchors();
+                statusText.innerText = `Added point! (${points.length / 2} total)`;
             }
         });
 
@@ -619,7 +777,7 @@
                 maskMoveLastPos = null;
                 stage.draggable(true);
                 drawAnchors();
-                statusText.innerText = "Mask repositioned! Remember to save or approve.";
+                statusText.innerText = "Mask repositioned!";
                 return;
             }
 
@@ -627,23 +785,41 @@
             isDrawingBox = false;
             tempRect.visible(false);
             
-            saveState(); // Save state before creating the box, allowing undo back to empty state
+            saveState();
 
             const pos = getRelativePointer();
             points = [ boxStartX, boxStartY, pos.x, boxStartY, pos.x, pos.y, boxStartX, pos.y ];
             
             stage.draggable(true);
             drawAnchors();
-            statusText.innerText = "Box generated! Adjust the corners if needed.";
+            statusText.innerText = "Box drawn! Press [D] for next frame or adjust corners.";
         });
 
         // Keyboard Mappings
         document.addEventListener('keydown', (e) => {
             if(e.target.tagName === 'INPUT' || e.target.tagName === 'SELECT') return;
+            
+            // Hold Backspace for rapid vertex delete
+            if (e.key === 'Backspace') {
+                e.preventDefault(); // Prevent browser navigating back!
+                if (!isHoldingBackspace) {
+                    isHoldingBackspace = true;
+                    document.body.style.cursor = 'crosshair';
+                    statusText.innerText = "[ERASER ACTIVE] Hover over dots to delete!";
+                }
+                return;
+            }
+
             const key = e.key.toLowerCase();
             if(key === 'a') navigate('prev');
             if(key === 'd') navigate('next');
-            if(key === 'w') navigate('next', null, 'approved');
+            if(key === 'w') {
+                if (currentMode === 'edit') {
+                    navigate('next', null, 'approved');
+                } else {
+                    navigate('next'); // In Annotate mode, W simply moves next
+                }
+            }
             if(key === 'c') copyMask();
             if(key === 'v') pasteMask();
             if(key === 'r') clearMask();
@@ -651,6 +827,14 @@
             if(key === 't') {
                 const isVisible = anchorGroup.visible();
                 anchorGroup.visible(!isVisible);
+            }
+        });
+
+        document.addEventListener('keyup', (e) => {
+            if (e.key === 'Backspace') {
+                isHoldingBackspace = false;
+                document.body.style.cursor = 'default';
+                statusText.innerText = `Eraser off (${points.length / 2} vertices).`;
             }
         });
 
