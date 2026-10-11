@@ -18,13 +18,14 @@
 
     <h1 class="text-3xl font-bold mb-2 text-green-400">YOLO Web QA Tool (Pro V4)</h1>
     <p class="mb-4 text-sm text-gray-400">
-        <b>Left-Click + Drag</b> dots. <b>[Ctrl + Drag]</b> Move mask. <b>Right-Click Canvas</b> to add dot. <b>[W]</b> Approve. <b>[C]</b> Copy Mask. <b>[V]</b> Paste Mask. <b>[T]</b> Toggle dots. <b>[R]</b> Reset to Box. <b>[Z]</b> Undo.
+        <b>Left-Click + Drag</b> dots. <b>[Ctrl + Drag]</b> Move mask. <b>Right-Click Canvas</b> to add dot. <b>[W]</b> Approve. <b>[F]</b> Rerun. <b>[C]</b> Copy Mask. <b>[V]</b> Paste Mask. <b>[T]</b> Toggle dots. <b>[R]</b> Reset to Box. <b>[Z]</b> Undo.
     </p>
 
     <!-- Dropdown for Skins -->
     <div class="flex gap-4 mb-4 items-center bg-gray-800 p-3 rounded shadow">
         <label for="skin-select" class="text-gray-300 font-bold">Filter Skin:</label>
         <select id="skin-select" class="p-2 rounded text-black font-bold w-64">
+            <optgroup id="opt-rerun" label="Needs Rerun"></optgroup>
             <optgroup id="opt-pending" label="Pending Skins"></optgroup>
             <optgroup id="opt-finished" label="Finished Tagging"></optgroup>
         </select>
@@ -49,6 +50,7 @@
         <button id="btn-undo" class="bg-blue-600 px-6 py-2 rounded font-bold hover:bg-blue-500 hidden text-white shadow">Undo (Z)</button>
         <button id="btn-reset-mask" class="bg-purple-600 px-4 py-2 rounded font-bold hover:bg-purple-500 hidden">Reset to Box (R)</button>
         <button id="btn-approve" class="bg-green-500 px-6 py-2 rounded font-bold text-lg hover:bg-green-400 hidden">Approve (W)</button>
+        <button id="btn-rerun" class="bg-orange-500 px-5 py-2 rounded font-bold text-lg hover:bg-orange-400 hidden text-white shadow">Add to Rerun (F)</button>
         <button id="btn-reject" class="bg-red-500 px-4 py-2 rounded font-bold hover:bg-red-400 hidden">Reject</button>
     </div>
 
@@ -113,6 +115,7 @@
         const btnPrev = document.getElementById('btn-prev');
         const btnNext = document.getElementById('btn-next');
         const btnApprove = document.getElementById('btn-approve');
+        const btnRerun = document.getElementById('btn-rerun');
         const btnReject = document.getElementById('btn-reject');
         const btnResetMask = document.getElementById('btn-reset-mask');
         const btnUndo = document.getElementById('btn-undo');
@@ -128,7 +131,7 @@
             if (!selectedSkin) return;
             
             const skinTasks = allTasks.filter(t => t.skin_name === selectedSkin);
-            const isFinished = skinTasks.every(t => t.status !== 'pending');
+            const isFinished = skinTasks.every(t => t.status !== 'pending' && t.status !== 'rerun');
             if (isFinished) {
                 btnSkinDone.classList.add('hidden');
                 btnSkinReset.classList.remove('hidden');
@@ -139,26 +142,42 @@
         }
         
         function updateDropdown() {
+            const optRerun = document.getElementById('opt-rerun');
             const optPending = document.getElementById('opt-pending');
             const optFinished = document.getElementById('opt-finished');
             const currentSelection = skinSelect.value;
             
+            optRerun.innerHTML = '';
             optPending.innerHTML = '';
             optFinished.innerHTML = '';
             
             const uniqueSkins = [...new Set(allTasks.map(t => t.skin_name))];
             uniqueSkins.forEach(skin => {
                 const skinTasks = allTasks.filter(t => t.skin_name === skin);
-                const isFinished = skinTasks.every(t => t.status !== 'pending');
+                const rerunCount = skinTasks.filter(t => t.status === 'rerun').length;
                 const approvedCount = skinTasks.filter(t => t.status === 'approved').length;
+                const isFinished = skinTasks.every(t => t.status !== 'pending' && t.status !== 'rerun');
                 
                 const opt = document.createElement('option');
                 opt.value = skin;
-                opt.innerText = `${skin} (${approvedCount}/${skinTasks.length})`;
                 
-                if (isFinished) optFinished.appendChild(opt);
-                else optPending.appendChild(opt);
+                if (rerunCount > 0) {
+                    opt.innerText = `${skin} (${rerunCount} Rerun Needed)`;
+                    optRerun.appendChild(opt);
+                } else if (isFinished) {
+                    opt.innerText = `${skin} (${approvedCount}/${skinTasks.length})`;
+                    optFinished.appendChild(opt);
+                } else {
+                    opt.innerText = `${skin} (${approvedCount}/${skinTasks.length})`;
+                    optPending.appendChild(opt);
+                }
             });
+            
+            if (optRerun.children.length === 0) {
+                optRerun.style.display = 'none';
+            } else {
+                optRerun.style.display = 'block';
+            }
             
             // If the previously selected skin still exists, keep it, otherwise default to first
             if (uniqueSkins.includes(currentSelection)) {
@@ -185,6 +204,7 @@
             btnPrev.classList.remove('hidden');
             btnNext.classList.remove('hidden');
             btnApprove.classList.remove('hidden');
+            btnRerun.classList.remove('hidden');
             btnReject.classList.remove('hidden');
             btnResetMask.classList.remove('hidden');
             btnUndo.classList.remove('hidden');
@@ -231,6 +251,9 @@
             skinSelect.dispatchEvent(new Event('change'));
         });
 
+        // Navigation Undo Stack (Tracks Rerun / Approve / Status changes across frames)
+        let navHistory = [];
+
         // Undo System
         function saveState() {
             pointsHistory.push([...points]);
@@ -238,19 +261,50 @@
         }
 
         function applyUndo() {
+            // First check if there is an in-frame point undo
             if (pointsHistory.length > 0) {
                 points = pointsHistory.pop();
                 drawAnchors();
-                statusText.innerText = "Undo applied.";
-            } else {
-                statusText.innerText = "Nothing to undo!";
+                statusText.innerText = "Undo applied (canvas points).";
+                return;
             }
+            
+            // Otherwise, check if we can undo the last navigation action (e.g. undo Add to Rerun)
+            if (navHistory.length > 0) {
+                const lastNav = navHistory.pop();
+                const targetTask = allTasks.find(t => t.id === lastNav.taskId);
+                if (targetTask) {
+                    targetTask.status = lastNav.prevStatus;
+                    targetTask.yolo_coordinates = lastNav.prevCoords;
+                    
+                    // Revert in database
+                    sb.from('qa_tasks').update({
+                        status: lastNav.prevStatus,
+                        yolo_coordinates: lastNav.prevCoords
+                    }).eq('id', targetTask.id).then(res => {
+                        if (res.error) alert("Database Error: " + res.error.message);
+                        updateDropdown();
+                    });
+                    
+                    // Jump back to that task
+                    const inCurrentListIdx = tasks.findIndex(t => t.id === targetTask.id);
+                    if (inCurrentListIdx !== -1) {
+                        currentIndex = inCurrentListIdx;
+                    }
+                    loadCurrentTask();
+                    statusText.innerText = `Undo: Reverted ${targetTask.filename} back to ${lastNav.prevStatus.toUpperCase()}!`;
+                    return;
+                }
+            }
+            
+            statusText.innerText = "Nothing to undo!";
         }
         btnUndo.addEventListener('click', applyUndo);
 
         btnPrev.addEventListener('click', () => navigate('prev'));
         btnNext.addEventListener('click', () => navigate('next'));
         btnApprove.addEventListener('click', () => navigate('next', null, 'approved'));
+        btnRerun.addEventListener('click', () => navigate('next', null, 'rerun'));
         btnReject.addEventListener('click', () => navigate('next', null, 'rejected'));
 
         function clearMask() {
@@ -309,6 +363,17 @@
             const task = tasks[currentIndex];
             let newStatus = forceStatus !== null ? forceStatus : task.status;
             let newYoloStr = task.yolo_coordinates; // Fallback to current if invalid
+            
+            // Record to navHistory if a status transition occurs (e.g. marking Rerun or Approved)
+            if (forceStatus !== null && forceStatus !== task.status) {
+                navHistory.push({
+                    taskId: task.id,
+                    prevStatus: task.status,
+                    prevCoords: task.yolo_coordinates,
+                    prevIndex: currentIndex
+                });
+                if (navHistory.length > 20) navHistory.shift();
+            }
             
             if (newStatus === 'rejected') {
                 // Instantly remove it from the site
@@ -589,6 +654,7 @@
             if(key === 'a') navigate('prev');
             if(key === 'd') navigate('next');
             if(key === 'w') navigate('next', null, 'approved');
+            if(key === 'f') navigate('next', null, 'rerun');
             if(key === 'c') copyMask();
             if(key === 'v') pasteMask();
             if(key === 'r') clearMask();
