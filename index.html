@@ -18,7 +18,7 @@
 
     <h1 class="text-3xl font-bold mb-2 text-green-400">YOLO Web QA Tool (Pro V4)</h1>
     <p class="mb-4 text-sm text-gray-400">
-        <b>Left-Click + Drag</b> dots. <b>Right-Click Canvas</b> to add dot. <b>[W]</b> Approve. <b>[C]</b> Copy Mask. <b>[V]</b> Paste Mask. <b>[T]</b> Toggle dots. <b>[R]</b> Reset to Box. <b>[Z]</b> Undo.
+        <b>Left-Click + Drag</b> dots. <b>[Ctrl + Drag]</b> Move mask. <b>Right-Click Canvas</b> to add dot. <b>[W]</b> Approve. <b>[C]</b> Copy Mask. <b>[V]</b> Paste Mask. <b>[T]</b> Toggle dots. <b>[R]</b> Reset to Box. <b>[Z]</b> Undo.
     </p>
 
     <!-- Dropdown for Skins -->
@@ -72,6 +72,10 @@
         // Box Drawing State
         let isDrawingBox = false;
         let boxStartX = 0, boxStartY = 0;
+
+        // Mask Move State (Ctrl + Drag)
+        let isMovingMask = false;
+        let maskMoveLastPos = null;
 
         const CANVAS_WIDTH = 1000;
         const CANVAS_HEIGHT = 700;
@@ -483,6 +487,16 @@
         document.getElementById('canvas-container').addEventListener('contextmenu', e => e.preventDefault());
 
         stage.on('mousedown', (e) => {
+            // Check for Ctrl + Left Click to drag the entire mask
+            if (e.evt.button === 0 && e.evt.ctrlKey && points.length > 0) {
+                isMovingMask = true;
+                maskMoveLastPos = getRelativePointer();
+                stage.draggable(false);
+                saveState(); // Record for undo
+                statusText.innerText = "Dragging entire mask... Release mouse to set.";
+                return;
+            }
+
             if(e.target.className === 'Circle') return;
             
             if(points.length === 0 && e.evt.button === 0) {
@@ -519,6 +533,25 @@
         });
 
         stage.on('mousemove', (e) => {
+            if (isMovingMask && maskMoveLastPos) {
+                const currentPos = getRelativePointer();
+                const dx = currentPos.x - maskMoveLastPos.x;
+                const dy = currentPos.y - maskMoveLastPos.y;
+                maskMoveLastPos = currentPos;
+
+                for (let i = 0; i < points.length; i += 2) {
+                    points[i] += dx;
+                    points[i+1] += dy;
+                }
+                polygon.points(points);
+                anchorGroup.children.forEach((circle, idx) => {
+                    circle.x(points[idx * 2]);
+                    circle.y(points[idx * 2 + 1]);
+                });
+                layer.batchDraw();
+                return;
+            }
+
             if(!isDrawingBox) return;
             const pos = getRelativePointer();
             tempRect.width(pos.x - boxStartX);
@@ -526,6 +559,15 @@
         });
 
         stage.on('mouseup', (e) => {
+            if (isMovingMask) {
+                isMovingMask = false;
+                maskMoveLastPos = null;
+                stage.draggable(true);
+                drawAnchors();
+                statusText.innerText = "Mask repositioned! Remember to save or approve.";
+                return;
+            }
+
             if(!isDrawingBox) return;
             isDrawingBox = false;
             tempRect.visible(false);
