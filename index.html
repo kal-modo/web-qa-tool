@@ -144,21 +144,21 @@
         const btnSkinReset = document.getElementById('btn-skin-reset');
 
         // Helpers to classify task state based on YOLO coordinates and status constraint
-        function isAnnotated(t) {
-            // Boxed: has exactly 8 coordinates (4 corners)
+        function isBoxApproved(t) {
             const parts = (t.yolo_coordinates || '').trim().split(/\s+/);
             const numCoords = parts.length > 1 ? parts.length - 1 : 0;
-            return numCoords === 8;
+            return numCoords === 8 && parts[0] === '1';
         }
 
-        function isPendingAnnotation(t) {
+        function isPendingBoxReview(t) {
             if (t.status === 'approved' || t.status === 'rejected') return false;
-            return !isAnnotated(t);
+            const parts = (t.yolo_coordinates || '').trim().split(/\s+/);
+            const numCoords = parts.length > 1 ? parts.length - 1 : 0;
+            return numCoords < 8 || (numCoords === 8 && parts[0] !== '1');
         }
 
         function isPendingEdit(t) {
             if (t.status === 'approved' || t.status === 'rejected') return false;
-            // Has polygon from SAM (> 8 coords) and is pending review
             const parts = (t.yolo_coordinates || '').trim().split(/\s+/);
             const numCoords = parts.length > 1 ? parts.length - 1 : 0;
             return numCoords > 8;
@@ -169,20 +169,21 @@
         }
 
         function updateModeUI() {
+            btnApprove.classList.remove('hidden'); // Approve button available in BOTH modes!
             if (currentMode === 'annotate') {
                 tabAnnotate.classList.add('active');
                 tabEdit.classList.remove('active');
-                btnApprove.classList.add('hidden'); // Annotate mode does NOT need approve button
-                btnResetMask.innerText = "Re-Box (R)";
-                modeInstructions.innerHTML = `<b>[Annotate Mode]</b> Drag box around character body. <b>[D]</b> Next / Auto-Save. <b>[A]</b> Prev. <b>[R]</b> Re-box. <b>[Z]</b> Undo.`;
-                btnSkinDone.innerText = "Mark Skin as Finished Annotating";
+                btnApprove.innerText = "Approve Box (W)";
+                btnResetMask.innerText = "Redo Box (R)";
+                modeInstructions.innerHTML = `<b>[Annotate / Box Mode]</b> Review auto-boxes. <b>[W]</b> Approve Box. <b>[R]</b> Redo Box. <b>[D]</b> Skip. <b>[A]</b> Prev.`;
+                btnSkinDone.innerText = "Approve All Boxes for Skin";
                 btnSkinReset.innerText = "Reset Skin to Blank";
             } else {
                 tabEdit.classList.add('active');
                 tabAnnotate.classList.remove('active');
-                btnApprove.classList.remove('hidden'); // Edit mode requires approval
+                btnApprove.innerText = "Approve Mask (W)";
                 btnResetMask.innerText = "Clear Mask (R)";
-                modeInstructions.innerHTML = `<b>[Edit Mode]</b> Drag dots to nudge. <b>Hold [Backspace] & Hover</b> over dots to rapidly delete. <b>[W]</b> Approve. <b>[D]</b> Skip. <b>[A]</b> Prev.`;
+                modeInstructions.innerHTML = `<b>[Edit Mode]</b> Review SAM masks. Drag dots to nudge. <b>Hold [Backspace] & Hover</b> to delete weapon dots. <b>[W]</b> Approve. <b>[D]</b> Skip. <b>[A]</b> Prev.`;
                 btnSkinDone.innerText = "Mark Skin as Finished Editing";
                 btnSkinReset.innerText = "Send Skin Back to Edit";
             }
@@ -211,7 +212,7 @@
             
             const skinTasks = allTasks.filter(t => t.skin_name === selectedSkin && t.status !== 'rejected');
             if (currentMode === 'annotate') {
-                const isFinished = skinTasks.every(t => isAnnotated(t) || t.status === 'approved' || isPendingEdit(t));
+                const isFinished = skinTasks.every(t => isBoxApproved(t) || t.status === 'approved' || isPendingEdit(t));
                 if (isFinished) {
                     btnSkinDone.classList.add('hidden');
                     btnSkinReset.classList.remove('hidden');
@@ -240,8 +241,8 @@
             optFinished.innerHTML = '';
             
             if (currentMode === 'annotate') {
-                optPending.label = "Pending Annotation";
-                optFinished.label = "Finished Annotating";
+                optPending.label = "Pending Box Review";
+                optFinished.label = "Approved Boxes";
             } else {
                 optPending.label = "Pending Edit";
                 optFinished.label = "Finished Editing";
@@ -255,7 +256,7 @@
                 let isSkinDone = false;
                 
                 if (currentMode === 'annotate') {
-                    doneCount = skinTasks.filter(t => isAnnotated(t) || t.status === 'approved' || t.status === 'pending_edit').length;
+                    doneCount = skinTasks.filter(t => isBoxApproved(t) || t.status === 'approved' || isPendingEdit(t)).length;
                     isSkinDone = (doneCount === total);
                 } else {
                     doneCount = skinTasks.filter(t => t.status === 'approved').length;
@@ -311,7 +312,7 @@
             // Jump to first pending task for current mode
             let targetIdx = -1;
             if (currentMode === 'annotate') {
-                targetIdx = tasks.findIndex(t => isPendingAnnotation(t));
+                targetIdx = tasks.findIndex(t => isPendingBoxReview(t));
             } else {
                 targetIdx = tasks.findIndex(t => t.status !== 'approved');
             }
@@ -325,7 +326,22 @@
             if(!selectedSkin) return;
             
             if (currentMode === 'annotate') {
-                alert(`All boxed frames for ${selectedSkin} are saved in the database!\nYou can now run 'python run_sam_to_supabase.py' in your terminal to generate SAM polygons.`);
+                if(!confirm(`Approve all auto-boxes for ${selectedSkin} (mark ready for SAM)?`)) return;
+                statusText.innerText = `Approving boxes...`;
+                
+                const skinTasks = allTasks.filter(t => t.skin_name === selectedSkin && t.status !== 'approved' && t.status !== 'rejected');
+                for (let t of skinTasks) {
+                    const parts = t.yolo_coordinates.trim().split(/\s+/);
+                    if (parts.length === 9 && parts[0] !== '1') {
+                        parts[0] = '1';
+                        const newStr = parts.join(' ');
+                        t.yolo_coordinates = newStr;
+                        await sb.from('qa_tasks').update({ yolo_coordinates: newStr }).eq('id', t.id);
+                    }
+                }
+                statusText.innerText = `All boxes approved for ${selectedSkin}! You can now run 'python run_sam_to_supabase.py'`;
+                updateDropdown();
+                skinSelect.dispatchEvent(new Event('change'));
             } else {
                 if(!confirm(`Approve all remaining frames for ${selectedSkin} (Finished Editing)?`)) return;
                 statusText.innerText = `Approving...`;
@@ -392,7 +408,11 @@
             polygon.points([]);
             layer.batchDraw();
             stage.draggable(false);
-            statusText.innerText = "Mask cleared. Click and drag to draw a box.";
+            if (currentMode === 'annotate') {
+                statusText.innerText = "Box cleared. Click & drag a new box around the character, then hit [W] to Approve.";
+            } else {
+                statusText.innerText = "Mask cleared. Click and drag to draw a box.";
+            }
         }
 
         // Copy / Paste Mask
@@ -456,6 +476,22 @@
                 return;
             }
             
+            if (forceStatus === 'approved') {
+                if (currentMode === 'annotate') {
+                    if (points.length !== 8) {
+                        alert("Draw or adjust a 4-corner box around the character before approving!");
+                        return;
+                    }
+                    newStatus = 'pending'; // Keep compliant with database check constraint
+                } else {
+                    if (points.length < 6) {
+                        alert("A character mask is required to approve this frame!");
+                        return;
+                    }
+                    newStatus = 'approved';
+                }
+            }
+
             if (imageNode) {
                 if (points.length >= 6) {
                     const w = imageNode.width();
@@ -464,7 +500,12 @@
                     const startY = imageNode.y();
                     
                     const origParts = task.yolo_coordinates.split(' ');
-                    const classId = origParts.length > 0 ? origParts[0] : "0";
+                    let classId = "0";
+                    if (currentMode === 'annotate') {
+                        classId = (forceStatus === 'approved') ? "1" : (origParts[0] || "0");
+                    } else {
+                        classId = origParts[0] || "0";
+                    }
                     newYoloStr = classId;
                     
                     for(let i=0; i<points.length; i+=2) {
@@ -472,11 +513,6 @@
                         let ny = Math.max(0, Math.min(1, (points[i+1] - startY) / h));
                         newYoloStr += ` ${nx.toFixed(6)} ${ny.toFixed(6)}`;
                     }
-
-
-                } else if (newStatus === 'approved') {
-                    alert("A character mask is required to approve this frame! (Or click Reject if there is no character).");
-                    return;
                 } else {
                     newYoloStr = task.yolo_coordinates;
                 }
@@ -602,7 +638,11 @@
                     if (currentMode === 'edit') {
                         statusText.innerText = `[Edit Mode] ${ptCount} vertices | Hold [Backspace] & hover to delete | ${task.filename}`;
                     } else {
-                        statusText.innerText = `[Boxed] ${ptCount} points | ${task.filename}`;
+                        if (isBoxApproved(task)) {
+                            statusText.innerText = `[Box Approved] Press [W] to re-confirm or [R] to Redo Box | ${task.filename}`;
+                        } else {
+                            statusText.innerText = `[Auto-Boxed] Press [W] to Approve Box, or [R] to Redo Box | ${task.filename}`;
+                        }
                     }
                 }
             };
