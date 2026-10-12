@@ -143,25 +143,25 @@
         const btnSkinDone = document.getElementById('btn-skin-done');
         const btnSkinReset = document.getElementById('btn-skin-reset');
 
-        // Helpers to classify task state
+        // Helpers to classify task state based on YOLO coordinates and status constraint
         function isAnnotated(t) {
-            // Boxed: has 8 coords (4 corners) or status is 'annotated'
+            // Boxed: has exactly 8 coordinates (4 corners)
             const parts = (t.yolo_coordinates || '').trim().split(/\s+/);
             const numCoords = parts.length > 1 ? parts.length - 1 : 0;
-            return t.status === 'annotated' || numCoords === 8;
+            return numCoords === 8;
         }
 
         function isPendingAnnotation(t) {
-            if (t.status === 'approved' || t.status === 'pending_edit') return false;
+            if (t.status === 'approved' || t.status === 'rejected') return false;
             return !isAnnotated(t);
         }
 
         function isPendingEdit(t) {
-            if (t.status === 'approved') return false;
-            // Either status explicitly set to pending_edit or has polygon (> 8 coords)
+            if (t.status === 'approved' || t.status === 'rejected') return false;
+            // Has polygon from SAM (> 8 coords) and is pending review
             const parts = (t.yolo_coordinates || '').trim().split(/\s+/);
             const numCoords = parts.length > 1 ? parts.length - 1 : 0;
-            return t.status === 'pending_edit' || (t.status !== 'annotated' && numCoords > 8);
+            return numCoords > 8;
         }
 
         function isFinishedEditing(t) {
@@ -209,9 +209,9 @@
             const selectedSkin = skinSelect.value;
             if (!selectedSkin) return;
             
-            const skinTasks = allTasks.filter(t => t.skin_name === selectedSkin);
+            const skinTasks = allTasks.filter(t => t.skin_name === selectedSkin && t.status !== 'rejected');
             if (currentMode === 'annotate') {
-                const isFinished = skinTasks.every(t => isAnnotated(t) || t.status === 'approved' || t.status === 'pending_edit');
+                const isFinished = skinTasks.every(t => isAnnotated(t) || t.status === 'approved' || isPendingEdit(t));
                 if (isFinished) {
                     btnSkinDone.classList.add('hidden');
                     btnSkinReset.classList.remove('hidden');
@@ -325,22 +325,7 @@
             if(!selectedSkin) return;
             
             if (currentMode === 'annotate') {
-                if(!confirm(`Mark all frames for ${selectedSkin} as Finished Annotating (Ready for SAM)?`)) return;
-                statusText.innerText = `Updating...`;
-                
-                // Set non-approved tasks with boxes to 'annotated'
-                const { error } = await sb.from('qa_tasks')
-                    .update({ status: 'annotated' })
-                    .eq('skin_name', selectedSkin)
-                    .neq('status', 'approved')
-                    .neq('status', 'rejected');
-                    
-                if(error) { alert("Database error: " + error.message); return; }
-                allTasks.forEach(t => { 
-                    if(t.skin_name === selectedSkin && t.status !== 'approved' && t.status !== 'rejected') {
-                        t.status = 'annotated'; 
-                    }
-                });
+                alert(`All boxed frames for ${selectedSkin} are saved in the database!\nYou can now run 'python run_sam_to_supabase.py' in your terminal to generate SAM polygons.`);
             } else {
                 if(!confirm(`Approve all remaining frames for ${selectedSkin} (Finished Editing)?`)) return;
                 statusText.innerText = `Approving...`;
@@ -367,17 +352,17 @@
             if(!selectedSkin) return;
             
             if (currentMode === 'annotate') {
-                if(!confirm(`Reset annotation status for ${selectedSkin} back to pending?`)) return;
+                if(!confirm(`Reset all bounding boxes for ${selectedSkin} back to blank?`)) return;
                 statusText.innerText = `Resetting...`;
-                const { error } = await sb.from('qa_tasks').update({ status: 'pending' }).eq('skin_name', selectedSkin).neq('status', 'approved');
+                const { error } = await sb.from('qa_tasks').update({ yolo_coordinates: '0', status: 'pending' }).eq('skin_name', selectedSkin).neq('status', 'approved');
                 if(error) { alert("Database error: " + error.message); return; }
-                allTasks.forEach(t => { if(t.skin_name === selectedSkin && t.status !== 'approved') t.status = 'pending'; });
+                allTasks.forEach(t => { if(t.skin_name === selectedSkin && t.status !== 'approved') { t.yolo_coordinates = '0'; t.status = 'pending'; } });
             } else {
-                if(!confirm(`Send ${selectedSkin} back to Pending Edit?`)) return;
+                if(!confirm(`Send ${selectedSkin} back to Pending Edit (re-open approved frames for editing)?`)) return;
                 statusText.innerText = `Updating...`;
-                const { error } = await sb.from('qa_tasks').update({ status: 'pending_edit' }).eq('skin_name', selectedSkin);
+                const { error } = await sb.from('qa_tasks').update({ status: 'pending' }).eq('skin_name', selectedSkin);
                 if(error) { alert("Database error: " + error.message); return; }
-                allTasks.forEach(t => { if(t.skin_name === selectedSkin) t.status = 'pending_edit'; });
+                allTasks.forEach(t => { if(t.skin_name === selectedSkin) t.status = 'pending'; });
             }
             
             updateDropdown();
@@ -488,12 +473,7 @@
                         newYoloStr += ` ${nx.toFixed(6)} ${ny.toFixed(6)}`;
                     }
 
-                    // In Annotate mode: if box has 8 coordinates (4 points) and is not approved, set status = 'annotated'
-                    if (currentMode === 'annotate' && newStatus !== 'approved') {
-                        if (points.length === 8) {
-                            newStatus = 'annotated';
-                        }
-                    }
+
                 } else if (newStatus === 'approved') {
                     alert("A character mask is required to approve this frame! (Or click Reject if there is no character).");
                     return;
