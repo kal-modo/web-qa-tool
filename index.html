@@ -244,13 +244,23 @@
                 optPending.label = "Pending Box Review";
                 optFinished.label = "Approved Boxes";
             } else {
-                optPending.label = "Pending Edit";
+                optPending.label = "Pending Edit (SAM Ready)";
                 optFinished.label = "Finished Editing";
             }
             
-            const uniqueSkins = [...new Set(allTasks.map(t => t.skin_name))];
-            uniqueSkins.forEach(skin => {
-                const skinTasks = allTasks.filter(t => t.skin_name === skin);
+            // In Edit/Annotate polygon mode: ONLY show skins that actually have SAM polygons generated!
+            // If a skin only has blank frames or raw boxes and hasn't run through SAM, hide it from this mode so only SAM-ready skins appear!
+            let eligibleSkins = [...new Set(allTasks.map(t => t.skin_name))];
+            if (currentMode === 'edit') {
+                eligibleSkins = eligibleSkins.filter(skin => {
+                    const skinTasks = allTasks.filter(t => t.skin_name === skin && t.status !== 'rejected');
+                    // A skin is eligible if it has SAM polygons (> 8 coords) or is fully finished (approved)
+                    return skinTasks.some(t => isPendingEdit(t) || t.status === 'approved');
+                });
+            }
+            
+            eligibleSkins.forEach(skin => {
+                const skinTasks = allTasks.filter(t => t.skin_name === skin && t.status !== 'rejected');
                 const total = skinTasks.length;
                 let doneCount = 0;
                 let isSkinDone = false;
@@ -274,10 +284,12 @@
                 }
             });
             
-            if (uniqueSkins.includes(currentSelection)) {
+            if (eligibleSkins.includes(currentSelection)) {
                 skinSelect.value = currentSelection;
             } else if (skinSelect.options.length > 0) {
                 skinSelect.selectedIndex = 0;
+            } else {
+                skinSelect.value = '';
             }
             updateButtonVisibility();
         }
@@ -307,6 +319,15 @@
             navigate('save_only');
             const selected = e.target.value;
             tasks = allTasks.filter(t => t.skin_name === selected);
+            
+            // In Edit mode: only load tasks that have polygons or are approved (skip un-SAM'd boxes)
+            if (currentMode === 'edit') {
+                const samTasks = tasks.filter(t => isPendingEdit(t) || t.status === 'approved');
+                if (samTasks.length > 0) {
+                    tasks = samTasks;
+                }
+            }
+            
             updateButtonVisibility();
             
             // Jump to first pending task for current mode
