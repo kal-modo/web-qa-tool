@@ -76,9 +76,13 @@
         let currentIndex = 0;
         
         let points = [];
+        let multiBoxes = []; // Array of [x1,y1,x2,y2,x3,y3,x4,y4] boxes
+        let multiBoxesHistory = [];
         let pointsHistory = [];
         let copiedMask = null;
-        let stage, layer, imageObj, imageNode, polygon, anchorGroup, tempRect;
+        let copiedUIBoxes = null;
+        let stage, layer, imageObj, imageNode, polygon, anchorGroup, boxGroup, tempRect;
+        let isHoldingSpace = false;
         
         let isImageLoading = false;
         
@@ -102,6 +106,7 @@
         stage.add(layer);
         
         anchorGroup = new Konva.Group();
+        boxGroup = new Konva.Group();
 
         // Math Helpers
         function sqr(x) { return x * x }
@@ -145,21 +150,28 @@
 
         // Helpers to classify task state based on YOLO coordinates and status constraint
         function isBoxApproved(t) {
-            const parts = (t.yolo_coordinates || '').trim().split(/\s+/);
+            const lines = (t.yolo_coordinates || '').trim().split('\n');
+            if (lines.length > 1) return t.status === 'approved' || (lines[0].trim().split(/\s+/)[0] === '1');
+            const parts = lines[0].trim().split(/\s+/);
             const numCoords = parts.length > 1 ? parts.length - 1 : 0;
             return numCoords === 8 && parts[0] === '1';
         }
 
         function isPendingBoxReview(t) {
             if (t.status === 'approved' || t.status === 'rejected') return false;
-            const parts = (t.yolo_coordinates || '').trim().split(/\s+/);
+            const lines = (t.yolo_coordinates || '').trim().split('\n');
+            if (lines.length > 1) return lines[0].trim().split(/\s+/)[0] !== '1';
+            const parts = lines[0].trim().split(/\s+/);
             const numCoords = parts.length > 1 ? parts.length - 1 : 0;
             return numCoords < 8 || (numCoords === 8 && parts[0] !== '1');
         }
 
         function isPendingEdit(t) {
             if (t.status === 'approved' || t.status === 'rejected') return false;
-            const parts = (t.yolo_coordinates || '').trim().split(/\s+/);
+            if (t.skin_name === 'UI') return false; // UI stays in annotate box mode
+            const lines = (t.yolo_coordinates || '').trim().split('\n');
+            if (lines.length > 1) return false;
+            const parts = lines[0].trim().split(/\s+/);
             const numCoords = parts.length > 1 ? parts.length - 1 : 0;
             return numCoords > 8;
         }
@@ -347,6 +359,18 @@
             if(!selectedSkin) return;
             
             if (currentMode === 'annotate') {
+                if (selectedSkin === 'UI') {
+                    if(!confirm(`Approve all frames for UI elements?`)) return;
+                    statusText.innerText = `Approving UI frames...`;
+                    const { error } = await sb.from('qa_tasks').update({ status: 'approved' }).eq('skin_name', 'UI');
+                    if(error) { alert("Database error: " + error.message); return; }
+                    allTasks.forEach(t => { if(t.skin_name === 'UI') t.status = 'approved'; });
+                    statusText.innerText = `All UI frames approved!`;
+                    updateDropdown();
+                    skinSelect.dispatchEvent(new Event('change'));
+                    return;
+                }
+                
                 if(!confirm(`Approve all auto-boxes for ${selectedSkin} (mark ready for SAM)?`)) return;
                 statusText.innerText = `Approving boxes...`;
                 
@@ -412,7 +436,23 @@
             if (pointsHistory.length > 30) pointsHistory.shift();
         }
 
+        function saveMultiBoxState() {
+            multiBoxesHistory.push(JSON.parse(JSON.stringify(multiBoxes)));
+            if (multiBoxesHistory.length > 30) multiBoxesHistory.shift();
+        }
+
         function applyUndo() {
+            const isUI = tasks[currentIndex] && tasks[currentIndex].skin_name === 'UI';
+            if (isUI) {
+                if (multiBoxesHistory.length > 0) {
+                    multiBoxes = multiBoxesHistory.pop();
+                    renderMultiBoxes();
+                    statusText.innerText = `Undo applied! (${multiBoxes.length} boxes)`;
+                } else {
+                    statusText.innerText = "Nothing to undo in this frame.";
+                }
+                return;
+            }
             if (pointsHistory.length > 0) {
                 points = pointsHistory.pop();
                 drawAnchors();
@@ -423,6 +463,18 @@
         }
 
         function clearMask() {
+            const isUI = tasks[currentIndex] && tasks[currentIndex].skin_name === 'UI';
+            if (isUI) {
+                if (multiBoxes.length > 0) {
+                    saveMultiBoxState();
+                    multiBoxes.pop();
+                    renderMultiBoxes();
+                    statusText.innerText = `Removed last box (${multiBoxes.length} boxes remaining). Hit [R] again to remove another.`;
+                } else {
+                    statusText.innerText = "No boxes to remove in this frame. Click & drag to draw a box.";
+                }
+                return;
+            }
             saveState();
             points = [];
             anchorGroup.destroyChildren();
@@ -436,8 +488,32 @@
             }
         }
 
-        // Copy / Paste Mask
+        // Copy / Paste Mask & Boxes
         function copyMask() {
+            const isUI = tasks[currentIndex] && tasks[currentIndex].skin_name === 'UI';
+            if (isUI) {
+                if (!imageNode || multiBoxes.length === 0) {
+                    statusText.innerText = "No UI boxes to copy!";
+                    return;
+                }
+                const w = imageNode.width();
+                const h = imageNode.height();
+                const startX = imageNode.x();
+                const startY = imageNode.y();
+                copiedUIBoxes = multiBoxes.map(box => {
+                    let norm = [];
+                    for (let i = 0; i < box.length; i += 2) {
+                        norm.push(
+                            Math.max(0, Math.min(1, (box[i] - startX) / w)),
+                            Math.max(0, Math.min(1, (box[i+1] - startY) / h))
+                        );
+                    }
+                    return norm;
+                });
+                statusText.innerText = `Copied ${copiedUIBoxes.length} UI boxes! Press [V] on any frame to paste all of them.`;
+                return;
+            }
+
             if (!imageNode || points.length < 6) {
                 statusText.innerText = "No valid mask to copy!";
                 return;
@@ -458,6 +534,30 @@
         }
 
         function pasteMask() {
+            const isUI = tasks[currentIndex] && tasks[currentIndex].skin_name === 'UI';
+            if (isUI) {
+                if (!copiedUIBoxes || copiedUIBoxes.length === 0) {
+                    statusText.innerText = "No UI boxes in clipboard! Press [C] to copy boxes first.";
+                    return;
+                }
+                if (!imageNode) return;
+                saveMultiBoxState();
+                const w = imageNode.width();
+                const h = imageNode.height();
+                const startX = imageNode.x();
+                const startY = imageNode.y();
+                multiBoxes = copiedUIBoxes.map(norm => {
+                    let box = [];
+                    for (let i = 0; i < norm.length; i += 2) {
+                        box.push(startX + (norm[i] * w), startY + (norm[i+1] * h));
+                    }
+                    return box;
+                });
+                renderMultiBoxes();
+                statusText.innerText = `Pasted ${multiBoxes.length} UI boxes! Press [W] to Approve or adjust corners.`;
+                return;
+            }
+
             if (!copiedMask || copiedMask.length < 6) {
                 statusText.innerText = "No mask in clipboard! Press [C] to copy a mask first.";
                 return;
@@ -497,8 +597,15 @@
                 return;
             }
             
+            const isUI = (task.skin_name === 'UI');
             if (forceStatus === 'approved') {
-                if (currentMode === 'annotate') {
+                if (isUI) {
+                    if (multiBoxes.length === 0) {
+                        alert("Draw at least one box around a UI element before approving!");
+                        return;
+                    }
+                    newStatus = 'approved';
+                } else if (currentMode === 'annotate') {
                     if (points.length !== 8) {
                         alert("Draw or adjust a 4-corner box around the character before approving!");
                         return;
@@ -514,7 +621,28 @@
             }
 
             if (imageNode) {
-                if (points.length >= 6) {
+                if (isUI) {
+                    if (multiBoxes.length > 0) {
+                        const w = imageNode.width();
+                        const h = imageNode.height();
+                        const startX = imageNode.x();
+                        const startY = imageNode.y();
+                        
+                        let lines = [];
+                        for (let box of multiBoxes) {
+                            let line = "8";
+                            for (let i = 0; i < box.length; i += 2) {
+                                let nx = Math.max(0, Math.min(1, (box[i] - startX) / w));
+                                let ny = Math.max(0, Math.min(1, (box[i+1] - startY) / h));
+                                line += ` ${nx.toFixed(6)} ${ny.toFixed(6)}`;
+                            }
+                            lines.push(line);
+                        }
+                        newYoloStr = lines.join('\n');
+                    } else {
+                        newYoloStr = task.yolo_coordinates;
+                    }
+                } else if (points.length >= 6) {
                     const w = imageNode.width();
                     const h = imageNode.height();
                     const startX = imageNode.x();
@@ -580,6 +708,107 @@
             navigate('jump', val - 1);
         });
 
+        function renderMultiBoxes() {
+            boxGroup.destroyChildren();
+            
+            multiBoxes.forEach((boxPts, boxIdx) => {
+                // Polygon line for box
+                const poly = new Konva.Line({
+                    points: boxPts,
+                    fill: 'rgba(56, 189, 248, 0.25)',
+                    stroke: '#38bdf8',
+                    strokeWidth: 2,
+                    closed: true
+                });
+                boxGroup.add(poly);
+                
+                let minX = Math.min(boxPts[0], boxPts[2], boxPts[4], boxPts[6]);
+                let maxX = Math.max(boxPts[0], boxPts[2], boxPts[4], boxPts[6]);
+                let minY = Math.min(boxPts[1], boxPts[3], boxPts[5], boxPts[7]);
+                let maxY = Math.max(boxPts[1], boxPts[3], boxPts[5], boxPts[7]);
+                
+                // Delete button [×] badge
+                const badgeGroup = new Konva.Group({
+                    x: maxX - 18,
+                    y: minY + 2
+                });
+                const badgeBg = new Konva.Rect({
+                    width: 16,
+                    height: 16,
+                    fill: '#ef4444',
+                    cornerRadius: 3
+                });
+                const badgeText = new Konva.Text({
+                    text: '×',
+                    fontSize: 14,
+                    fontStyle: 'bold',
+                    fill: 'white',
+                    x: 4,
+                    y: -1
+                });
+                badgeGroup.add(badgeBg);
+                badgeGroup.add(badgeText);
+                
+                badgeGroup.on('mouseenter', () => { document.body.style.cursor = 'pointer'; });
+                badgeGroup.on('mouseleave', () => { document.body.style.cursor = 'default'; });
+                badgeGroup.on('click tap', (e) => {
+                    e.cancelBubble = true;
+                    saveMultiBoxState();
+                    multiBoxes.splice(boxIdx, 1);
+                    renderMultiBoxes();
+                    statusText.innerText = `Deleted box! (${multiBoxes.length} boxes remaining)`;
+                });
+                
+                // Hover with Backspace deletes box
+                poly.on('mouseenter', function() {
+                    if (isHoldingBackspace) {
+                        saveMultiBoxState();
+                        multiBoxes.splice(boxIdx, 1);
+                        renderMultiBoxes();
+                        statusText.innerText = `Deleted box! (${multiBoxes.length} boxes remaining)`;
+                        return;
+                    }
+                    this.strokeWidth(3);
+                    this.stroke('#f87171');
+                    layer.batchDraw();
+                });
+                poly.on('mouseleave', function() {
+                    this.strokeWidth(2);
+                    this.stroke('#38bdf8');
+                    layer.batchDraw();
+                });
+                
+                // 4 Corner draggable handles
+                for (let c = 0; c < 8; c += 2) {
+                    const handle = new Konva.Circle({
+                        x: boxPts[c],
+                        y: boxPts[c+1],
+                        radius: 4,
+                        fill: 'white',
+                        stroke: '#38bdf8',
+                        strokeWidth: 2,
+                        draggable: true
+                    });
+                    handle.on('dragstart', () => saveMultiBoxState());
+                    handle.on('dragmove', function() {
+                        boxPts[c] = this.x();
+                        boxPts[c+1] = this.y();
+                        poly.points(boxPts);
+                        badgeGroup.x(Math.max(boxPts[0], boxPts[2], boxPts[4], boxPts[6]) - 18);
+                        badgeGroup.y(Math.min(boxPts[1], boxPts[3], boxPts[5], boxPts[7]) + 2);
+                    });
+                    handle.on('dragend', () => {
+                        renderMultiBoxes();
+                    });
+                    boxGroup.add(handle);
+                }
+                
+                boxGroup.add(badgeGroup);
+            });
+            
+            layer.batchDraw();
+        }
+
         function loadCurrentTask() {
             if (tasks.length === 0) {
                 statusText.innerText = "No tasks found for this skin.";
@@ -592,6 +821,8 @@
 
             isImageLoading = true;
             pointsHistory = [];
+            multiBoxes = [];
+            multiBoxesHistory = [];
             
             const task = tasks[currentIndex];
             frameInput.value = currentIndex + 1;
@@ -605,8 +836,10 @@
 
             layer.destroyChildren();
             anchorGroup.destroyChildren();
+            boxGroup.destroyChildren();
             
-            tempRect = new Konva.Rect({ stroke: '#4ade80', strokeWidth: 2, dash: [5, 5], visible: false });
+            const isUI = (task.skin_name === 'UI');
+            tempRect = new Konva.Rect({ stroke: isUI ? '#38bdf8' : '#4ade80', strokeWidth: 2, dash: [5, 5], visible: false });
 
             const { data: fileData } = sb.storage.from('dataset_frames').getPublicUrl(task.filename);
             
@@ -629,6 +862,45 @@
                 imageNode = new Konva.Image({ x, y, image: currentImg, width: w, height: h });
                 layer.add(imageNode);
 
+                if (isUI) {
+                    polygon = new Konva.Line({ points: [], visible: false });
+                    layer.add(polygon);
+                    layer.add(boxGroup);
+                    layer.add(tempRect);
+                    
+                    stage.draggable(false);
+                    btnApprove.innerText = "Approve Boxes (W)";
+                    btnResetMask.innerText = "Remove Last Box (R)";
+                    modeInstructions.innerHTML = `<b>[UI Multi-Box Mode]</b> Click & drag to box HUD corners (Minimap, Health, Weapons, Compass). <b>[C]</b> Copy Boxes, <b>[V]</b> Paste Boxes. <b>[W]</b> Approve. <b>[R]</b> Remove Last. Hold <b>[Space]</b> to pan.`;
+
+                    // Parse multi-line coordinates
+                    if (task.yolo_coordinates && task.yolo_coordinates.trim() !== '0') {
+                        const lines = task.yolo_coordinates.trim().split('\n');
+                        for (let line of lines) {
+                            const parts = line.trim().split(/\s+/).map(parseFloat);
+                            if (parts.length >= 9) {
+                                parts.shift(); // remove class id
+                                let boxPts = [];
+                                for (let i = 0; i < 8; i += 2) {
+                                    if (!isNaN(parts[i]) && !isNaN(parts[i+1])) {
+                                        boxPts.push(x + (parts[i] * w), y + (parts[i+1] * h));
+                                    }
+                                }
+                                if (boxPts.length === 8) multiBoxes.push(boxPts);
+                            }
+                        }
+                    }
+                    renderMultiBoxes();
+                    
+                    if (multiBoxes.length === 0) {
+                        statusText.innerText = `[UI Blank] Click & drag boxes around HUD corners | ${task.filename}`;
+                    } else {
+                        statusText.innerText = `[UI] ${multiBoxes.length} boxes loaded | [W] Approve | [C] Copy | [V] Paste | ${task.filename}`;
+                    }
+                    return;
+                }
+
+                // Normal single skin logic
                 const parts = task.yolo_coordinates.split(' ').map(parseFloat);
                 parts.shift(); // Remove class ID
                 
@@ -738,8 +1010,13 @@
         document.getElementById('canvas-container').addEventListener('contextmenu', e => e.preventDefault());
 
         stage.on('mousedown', (e) => {
+            // Spacebar hold allows panning canvas
+            if (isHoldingSpace) return;
+
+            const isUI = tasks[currentIndex] && tasks[currentIndex].skin_name === 'UI';
+
             // Check for Ctrl + Left Click to drag the entire mask
-            if (e.evt.button === 0 && e.evt.ctrlKey && points.length > 0) {
+            if (!isUI && e.evt.button === 0 && e.evt.ctrlKey && points.length > 0) {
                 isMovingMask = true;
                 maskMoveLastPos = getRelativePointer();
                 stage.draggable(false);
@@ -748,14 +1025,31 @@
                 return;
             }
 
-            if(e.target.className === 'Circle') return;
+            if (e.target.className === 'Circle' || e.target.className === 'Text') return;
+            if (isUI && e.target.className === 'Rect' && e.target !== imageNode) return;
             
-            // In Annotate mode: Left click to draw bounding box
+            // In UI Multi-box mode: Left click draws a new box
+            if (isUI && e.evt.button === 0) {
+                isDrawingBox = true;
+                const pos = getRelativePointer();
+                boxStartX = pos.x;
+                boxStartY = pos.y;
+                tempRect.stroke('#38bdf8');
+                tempRect.position({x: boxStartX, y: boxStartY});
+                tempRect.width(0);
+                tempRect.height(0);
+                tempRect.visible(true);
+                stage.draggable(false);
+                return;
+            }
+
+            // In normal skin Annotate mode: Left click to draw bounding box
             if(points.length === 0 && e.evt.button === 0) {
                 isDrawingBox = true;
                 const pos = getRelativePointer();
                 boxStartX = pos.x;
                 boxStartY = pos.y;
+                tempRect.stroke('#4ade80');
                 tempRect.position({x: boxStartX, y: boxStartY});
                 tempRect.width(0);
                 tempRect.height(0);
@@ -764,7 +1058,7 @@
             }
             
             // In Edit mode: Right click adds a new point to nearest edge
-            if(e.evt.button === 2 && points.length > 0) {
+            if(!isUI && e.evt.button === 2 && points.length > 0) {
                 saveState();
                 
                 const pos = getRelativePointer();
@@ -810,6 +1104,7 @@
             const pos = getRelativePointer();
             tempRect.width(pos.x - boxStartX);
             tempRect.height(pos.y - boxStartY);
+            layer.batchDraw();
         });
 
         stage.on('mouseup', (e) => {
@@ -825,12 +1120,32 @@
             if(!isDrawingBox) return;
             isDrawingBox = false;
             tempRect.visible(false);
-            
-            saveState();
 
             const pos = getRelativePointer();
-            points = [ boxStartX, boxStartY, pos.x, boxStartY, pos.x, pos.y, boxStartX, pos.y ];
+            const boxW = Math.abs(pos.x - boxStartX);
+            const boxH = Math.abs(pos.y - boxStartY);
+            if (boxW < 5 || boxH < 5) {
+                layer.batchDraw();
+                return;
+            }
+
+            const x1 = Math.min(boxStartX, pos.x);
+            const x2 = Math.max(boxStartX, pos.x);
+            const y1 = Math.min(boxStartY, pos.y);
+            const y2 = Math.max(boxStartY, pos.y);
+            const newBox = [ x1, y1, x2, y1, x2, y2, x1, y2 ];
+
+            const isUI = tasks[currentIndex] && tasks[currentIndex].skin_name === 'UI';
+            if (isUI) {
+                saveMultiBoxState();
+                multiBoxes.push(newBox);
+                renderMultiBoxes();
+                statusText.innerText = `Box #${multiBoxes.length} added! Draw more UI corners or press [W] to Approve.`;
+                return;
+            }
             
+            saveState();
+            points = newBox;
             stage.draggable(true);
             drawAnchors();
             statusText.innerText = "Box drawn! Press [D] for next frame or adjust corners.";
@@ -840,13 +1155,24 @@
         document.addEventListener('keydown', (e) => {
             if(e.target.tagName === 'INPUT' || e.target.tagName === 'SELECT') return;
             
+            // Hold Space to Pan canvas
+            if (e.code === 'Space') {
+                e.preventDefault();
+                if (!isHoldingSpace) {
+                    isHoldingSpace = true;
+                    stage.draggable(true);
+                    document.body.style.cursor = 'grab';
+                }
+                return;
+            }
+
             // Hold Backspace for rapid vertex delete
             if (e.key === 'Backspace') {
                 e.preventDefault(); // Prevent browser navigating back!
                 if (!isHoldingBackspace) {
                     isHoldingBackspace = true;
                     document.body.style.cursor = 'crosshair';
-                    statusText.innerText = "[ERASER ACTIVE] Hover over dots to delete!";
+                    statusText.innerText = "[ERASER ACTIVE] Hover over dots/boxes to delete!";
                 }
                 return;
             }
@@ -855,10 +1181,11 @@
             if(key === 'a') navigate('prev');
             if(key === 'd') navigate('next');
             if(key === 'w') {
-                if (currentMode === 'edit') {
+                const isUI = tasks[currentIndex] && tasks[currentIndex].skin_name === 'UI';
+                if (currentMode === 'edit' || isUI) {
                     navigate('next', null, 'approved');
                 } else {
-                    navigate('next'); // In Annotate mode, W simply moves next
+                    navigate('next'); // In Annotate mode for skins, W simply moves next
                 }
             }
             if(key === 'c') copyMask();
@@ -872,10 +1199,17 @@
         });
 
         document.addEventListener('keyup', (e) => {
+            if (e.code === 'Space') {
+                isHoldingSpace = false;
+                const isUI = tasks[currentIndex] && tasks[currentIndex].skin_name === 'UI';
+                stage.draggable(!isUI && points.length >= 6);
+                document.body.style.cursor = 'default';
+            }
             if (e.key === 'Backspace') {
                 isHoldingBackspace = false;
                 document.body.style.cursor = 'default';
-                statusText.innerText = `Eraser off (${points.length / 2} vertices).`;
+                const isUI = tasks[currentIndex] && tasks[currentIndex].skin_name === 'UI';
+                statusText.innerText = isUI ? `Eraser off (${multiBoxes.length} boxes).` : `Eraser off (${points.length / 2} vertices).`;
             }
         });
 
